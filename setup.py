@@ -15,7 +15,7 @@ def long_desc():
         return pypandoc.convert(README, 'rst')
 
 setup(
-    name='librelay-python',
+    name='relay',
     version='0',
     description='Port of Forsta librelay',
     author='Justin Mayfield',
@@ -24,7 +24,10 @@ setup(
     license='GPL',
     long_description=long_desc(),
     packages=find_packages(),
-    install_requires=['python-axolotl'],
+    install_requires=[
+        'python-axolotl'
+        'requests'
+    ],
     test_suite='test',
     classifiers=[
         'Development Status :: 4 - Beta',

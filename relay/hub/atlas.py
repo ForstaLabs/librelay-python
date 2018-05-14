@@ -6,6 +6,8 @@ import asyncio
 import base64
 import json
 import logging
+import re
+import requests
 import time
 from .. import storage
 from .. import util
@@ -25,9 +27,9 @@ def atobJWT(value):
 def decode_jwt(encoded_token):
     parts = [atobJWT(x) for x in encoded_token.split('.')]
     token = {
-        header: json.loads(parts[0]),
-        payload: json.loads(parts[1]),
-        secret: parts[2]
+        "header": json.loads(parts[0]),
+        "payload": json.loads(parts[1]),
+        "secret": parts[2]
     }
     if not token['payload'] or not token['payload']['exp']:
         raise TypeError("Invalid Token")
@@ -57,16 +59,14 @@ class AtlasClient(object):
         client = cls(**options)
         user, org = client.parse_tag(user_tag)
         await client.fetch(f'/v1/login/send/{org}/{user}/')
-        def callback(sms_code):
-            return cls.authenticateViaCode(user_tag, sms_code, **options)
-        return callback
+        return lambda code: cls.authenticateViaCode(user_tag, code, **options)
 
     @classmethod
     async def authenticate_via_code(cls, user_tag, code, **options):
         client = cls(**options)
         user, org = client.parse_tag(user_tag)
         auth = await client.fetch('/v1/login/authtoken/', method='POST',
-                                  json={"authtoken": ':'.join([org, user, code])})
+                                  json={"authtoken": f'{org}:{user}:{code}'})
         await storage.putState(cred_store_key, auth.token)
         await storage.putState(url_store_key, client.url)
         return cls(url=client.url, jwt=auth['token'])
@@ -95,7 +95,8 @@ class AtlasClient(object):
         json = resp.json() if is_json else None
         if not resp.ok:
             msg = f'{urn} ({resp.text})'
-            raise util.RequestError(msg, resp, resp.status_code, resp.text, json)
+            raise util.RequestError(msg, resp, resp.status_code, resp.text,
+                                    json)
         return json or resp.text
 
     async def maintain_jwt(self, force_refresh=False, authenticator=None,
@@ -131,7 +132,7 @@ class AtlasClient(object):
         logger.info('maintain_jwt will recheck auth token in %f seconds' %
                     next_update)
         await asyncio.sleep(next_update)
-        await self.maintain_jwt(false, authenticator, on_refresh)
+        await self.maintain_jwt(False, authenticator, on_refresh)
 
     async def resolve_tags(self, expression):
         return (await self.resolve_tags_batch([expression]))[0]
@@ -147,7 +148,7 @@ class AtlasClient(object):
                 w.context = expr[w.position, w.position + w.length]
         return resp.results
 
-    def sanitize_tags(expression):
+    def sanitize_tags(self, expression):
         """ Clean up tags a bit. Add @ where needed.
         NOTE: This does not currently support universal format! """
         sep_re = re.compile(r'([\s()^&+-]+)')
@@ -158,7 +159,7 @@ class AtlasClient(object):
             tags.append(tag)
         return ' '.join(tags)
 
-    async def get_users(user_ids, only_dir=False):
+    async def get_users(self, user_ids, only_dir=False):
         missing = set(user_ids)
         users = []
         if not only_dir:

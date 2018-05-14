@@ -10,7 +10,7 @@ class FSBacking(interface.StorageInterface):
     def __init__(self, label):
         super().__init__(label)
         self.root = Path(Path.home(), '.librelay/storage', label,
-                         'v' + self.version)
+                         f'v{self.version}')
 
     def to_path(self, ns, key):
         return Path(self.root, ns, key)

@@ -17,8 +17,8 @@ signed_prekey_ns = 'signedprekey'
 identitykey_ns = 'identitykey'
 
 
-_backing
-_Backing
+_backing = None
+_Backing = None
 _label = 'default'
 
 
@@ -226,8 +226,8 @@ async def get_device_ids(addr):
 
 def get_backing_class(name):
     return {
-        "redis": backing.RedisBacking,
-        "postgres": backing.PostgresBacking,
+        #"redis": backing.RedisBacking,
+        #"postgres": backing.PostgresBacking,
         "fs": backing.FSBacking
     }[name]
 

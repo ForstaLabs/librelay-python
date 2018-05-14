@@ -1,11 +1,10 @@
+import aiohttp
 import logging
 import re
 import urllib
-from . import fetch
-from .. import errors
-from .. import protobufs
+#from .. import protobufs
 from .. import storage
-from ..provision_cipher import ProvisioningCipher
+from ..provisioning_cipher import ProvisioningCipher
 from axolotl.util import KeyHelper
 from base64 import b64decode, b64encode
 
@@ -36,6 +35,12 @@ class SignalClient(object):
         self.url = url
         self.username = username
         self.password = password
+        self._httpClient = aiohttp.ClientSession(read_timeout=30,
+                                                 raise_for_status=True)
+
+    def __del__(self):
+        self._httpClient.close()
+        self._httpClient = None
 
     @classmethod
     async def factory(cls):
@@ -55,12 +60,14 @@ class SignalClient(object):
         pMessage.provisioningCode = provision_resp.verificationCode
         provisioningCipher = ProvisioningCipher()
         pEnvelope = await provisioningCipher.encrypt(pubkey, pMessage)
-        resp = await self.fetch('/v1/provisioning/' + uuid, method='PUT',
-            json={"body": b64encode(pEnvelope)})
-        if not resp.ok:
-            # 404 means someone else handled it already.
-            if resp.status_code != 404:
-                raise Exception(resp.text)
+        try:
+            async with await self.fetch('/v1/provisioning/' + uuid, method='PUT',
+                                        json={"body": b64encode(pEnvelope)}):
+                pass
+        except aiohttp.ClientResponseError as e:
+            # 404 is okay, just means someone else handled it already.
+            if e.status != 404:
+                raise e
 
     async def refresh_prekeys(self, minLevel=10, fill=100):
         preKeyCount = await self.getMyKeys()
@@ -101,24 +108,24 @@ class SignalClient(object):
     def auth_header(self, username, password):
         return 'Basic ' + b64encode(username + ':' + password)
 
-    async def request(self, call=None, urn='', httpType='GET',
+    async def request(self, call=None, urn='', method='GET',
                       json=None, username=None, password=None):
         path = SIGNAL_URL_CALLS.get(call) + urn
         headers = {}
         if username and password:
             headers['Authorization'] = self.auth_header(username, password)
-        resp = await self.fetch(path, method=httpType, json=json,
-                                headers=headers)
-        is_json = resp.headers.get('content-type', '') \
-            .startswith('application/json')
-        resp_content = resp.json() if is_json else resp.text
-        if not resp.ok:
-            e = errors.ProtocolError(resp.status, resp_content)
-            if e.code in SIGNAL_HTTP_MESSAGES:
-                e.message = SIGNAL_HTTP_MESSAGES[e.code]
-            else:
-                e.message = f'Status code: {e.code}'
-            raise e
+        async with await self.fetch(path, method=method, json=json,
+                                    headers=headers) as r:
+            is_json = r.content_type.startswith('application/json')
+            resp_content = await r.json() if is_json else await r.text()
+        # Can we just use native exceptions from aiohttp?? please
+        #if not resp.ok:
+        #    e = errors.ProtocolError(resp.status, resp_content)
+        #    if e.code in SIGNAL_HTTP_MESSAGES:
+        #        e.message = SIGNAL_HTTP_MESSAGES[e.code]
+        #    else:
+        #        e.message = f'Status code: {e.code}'
+        #    raise e
         return resp_content
 
     async def fetch(self, urn, headers=None, **kwargs):
@@ -128,27 +135,28 @@ class SignalClient(object):
         if 'Authorization' not in headers and self.username and self.password:
             headers['Authorization'] = self.auth_header(self.username,
                                                         self.password)
-        return await fetch(f'{self.url}/{urn.lstrip("/")}', **kwargs)  # XXX port to requests/aiohttp
+        return self._httpClient.request(url=f'{self.url}/{urn.lstrip("/")}',
+                                        headers=headers, **kwargs)
 
     async def get_devices(self):
         data = await self.request(call='devices')
         return data and data['devices']
 
     async def register_keys(self, keys):
-        jsonData = {}
-        jsonData['identityKey'] = b64encode(keys['identityKey'])
-        jsonData['signedPreKey'] = {
+        json = {}
+        json['identityKey'] = b64encode(keys['identityKey'])
+        json['signedPreKey'] = {
             "keyId": keys['signedPreKey']['keyId'],
             "publicKey": b64encode(keys['signedPreKey']['publicKey']),
             "signature": b64encode(keys['signedPreKey']['signature'])
         }
-        jsonData.preKeys = []
+        json.preKeys = []
         for pk in keys['prekeys']:
-            jsonData.append({
+            json.append({
                 "keyId": pk['keyId'],
                 "publicKey": b64encode(pk['publicKey'])
             })
-        return await self.request(call='keys', httpType='PUT', json=jsonData)
+        return await self.request(call='keys', method='PUT', json=json)
 
     async def get_my_keys(self):
         res = await self.request(call='keys')
@@ -166,40 +174,30 @@ class SignalClient(object):
         return res
 
     async def send_messages(self, destination, messages, timestamp):
-        return await self.request(call='messages', httpType='PUT',
+        return await self.request(call='messages', method='PUT',
                                   urn='/' + destination,
                                   json={"messages": messages,
                                         "timestamp": timestamp})
 
     async def get_attachment(self, id):
         """ XXX Build in retry handling... """
-        response = await self.request(call='attachment',
-                                      urn='/' + id)
-        headers = {'Content-Type': 'application/octet-stream'}
-        attachment = await fetch(response.location, {headers})  # XXX port to request/aiohttp
-        if not attachment.ok:
-            msg = await attachment.text()
-            logger.error("Download attachement error:", msg)
-            raise Exception('Download Attachment Error: ' + msg)
-        return await attachment.buffer()
+        ptr_resp = await self.request(call='attachment', urn='/' + id)
+        async with self._httpClient.get(ptr_resp['location']) as r:
+            return await r.read()
 
     async def put_attachment(self, body):
         """ XXX Build in retry handling... """
-        ptrResp = await self.request(call='attachment')
+        ptr_resp = await self.request(call='attachment')
         # Extract the id as a string from the location url
         # (workaround for ids too large for Javascript numbers) # XXX
-        match = self.attachment_id_regex.match(ptrResp['location'])
+        import pdb;pdb.set_trace()
+        match = self.attachment_id_regex.match(ptr_resp['location'])
         if not match:
             logger.error('Invalid attachment url for outgoing message',
-                          ptrResp.location)
+                          ptr_resp['location'])
             raise TypeError('Received invalid attachment url')
-        headers = {'Content-Type': 'application/octet-stream'}
-        dataResp = await fetch(ptrResp.location, method="PUT",  # XXX port to something requests/aiohttp..
-                               headers=headers, body=body)
-        if not dataResp.ok:
-            msg = await dataResp.text
-            logger.error("Upload attachement error:", msg)
-            raise Exception('Upload Attachment Error: ' + msg)
+        async with self._httpClient.put(ptr_resp['location'], data=body):
+            pass
         return match[1]
 
     def get_message_websocket_url(self):
@@ -217,5 +215,5 @@ class SignalClient(object):
         """ The GCM reg ID configures the data needed for the PushServer to
         wake us up using google cloud messaging's Push Server (an exercise for
         the user). """
-        return await self.request(call='accounts', httpType='PUT', urn='/gcm',
-            jsonData={"gcmRegistrationId": gcm_reg_id})
+        return await self.request(call='accounts', method='PUT', urn='/gcm',
+            json={"gcmRegistrationId": gcm_reg_id})

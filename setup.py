@@ -25,7 +25,7 @@ setup(
     long_description=long_desc(),
     packages=find_packages(),
     install_requires=[
-        'python-axolotl'
+        'python-axolotl',
         'requests'
     ],
     test_suite='test',

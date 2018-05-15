@@ -2,12 +2,12 @@
 Atlas API client
 """
 
+import aiohttp
 import asyncio
 import base64
 import json
 import logging
 import re
-import requests
 import time
 from .. import storage
 from .. import util
@@ -18,14 +18,13 @@ DEFAULT_ATLAS_URL = 'https://atlas.forsta.io'
 cred_store_key = 'atlasCredential'
 url_store_key = 'atlasUrl'
 
-
-def atobJWT(value):
-    """ See: https://github.com/yourkarma/JWT/issues/8 """
-    return base64.b64decode(value.replace('_', '/').replace('-', '+'))
+def jwt_b64decode(value):
+    padding = 4 - (len(value) % 4)
+    return base64.urlsafe_b64decode(value + ("=" * padding))
 
 
 def decode_jwt(encoded_token):
-    parts = [atobJWT(x) for x in encoded_token.split('.')]
+    parts = [jwt_b64decode(x) for x in encoded_token.split('.')]
     token = {
         "header": json.loads(parts[0]),
         "payload": json.loads(parts[1]),
@@ -40,18 +39,26 @@ def decode_jwt(encoded_token):
 
 class AtlasClient(object):
 
-    def __init__(self, url=DEFAULT_ATLAS_URL, jwt=None):
-        self.url = url
-        if (jwt):
-            jwtDict = decode_jwt(jwt)
-            self.user_id = jwtDict['payload']['user_id']
-            self.org_id = jwtDict['payload']['org_id']
+    def __init__(self, url=None, jwt=None):
+        self.url = url or DEFAULT_ATLAS_URL
+        if jwt:
+            jwt_dict = decode_jwt(jwt)
+            self.user_id = jwt_dict['payload']['user_id']
+            self.org_id = jwt_dict['payload']['org_id']
             self.auth_header = 'JWT ' + jwt
+        else:
+            self.auth_header = None
+        self._httpClient = aiohttp.ClientSession(read_timeout=30,
+                                                 raise_for_status=True)
+
+    def __del__(self):
+        asyncio.get_event_loop().create_task(self._httpClient.close())
+        self._httpClient = None
 
     @classmethod
     async def factory(cls):
-        url = await storage.getState(url_store_key)
-        jwt = await storage.getState(cred_store_key)
+        url = await storage.get_state(url_store_key)
+        jwt = await storage.get_state(cred_store_key)
         return cls(url=url, jwt=jwt)
 
     @classmethod
@@ -89,24 +96,22 @@ class AtlasClient(object):
     async def fetch(self, urn, method='GET', json=None):
         headers = self.auth_header and {'Authorization': self.auth_header}
         url = f'{self.url}/{urn.lstrip("/")}'
-        resp = requests.request(method, url, json=json, headers=headers)
-        is_json = resp.headers.get('content-type', '') \
-            .startswith('application/json')
-        json = resp.json() if is_json else None
-        if not resp.ok:
-            msg = f'{urn} ({resp.text})'
-            raise util.RequestError(msg, resp, resp.status_code, resp.text,
-                                    json)
-        return json or resp.text
+        logger.info(f"DEBUG REQ: {urn} {method} {json}")
+        async with self._httpClient.request(url=url, method=method, json=json,
+                                            headers=headers) as resp:
+            is_json = resp.content_type.startswith('application/json')
+            result = await resp.json() if is_json else await resp.text()
+            logger.info(f"DEBUG RES: {urn} {method} {json}: {result}")
+            return result
 
     async def maintain_jwt(self, force_refresh=False, authenticator=None,
                            on_refresh=None):
         """ Manage auth token expiration.  This routine will reschedule itself
         as needed. """
-        token = decode_jwt(await storage.getState(cred_store_key))
+        token = decode_jwt(await storage.get_state(cred_store_key))
         refresh_delay = lambda t: (t['payload']['exp'] - time.time()) / 2
         if force_refresh or refresh_delay(token) < 1:
-            encoded_token = await storage.getState(cred_store_key)
+            encoded_token = await storage.get_state(cred_store_key)
             resp = await self.fetch('/v1/api-token-refresh/', method="POST",
                                     json={"token": encoded_token})
             if not resp or not resp['token']:

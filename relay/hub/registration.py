@@ -32,14 +32,14 @@ async def register_account(atlas_client=None, name=default_name):
     password = generate_password()
     signaling_key = generate_signaling_key()
     r = await atlas_client.fetch('/v1/provision/account', method="PUT", json={
-        "signalingKey": base64.b64encode(signaling_key),
+        "signalingKey": base64.b64encode(signaling_key).decode(),
         "supportsSms": False,
         "fetchesMessages": True,
         "registrationId": registration_id,
         "name": name,
         "password": password
     })
-    addr = r.userId
+    addr = r['userId']
     username = f'{addr}.{r["deviceId"]}'
     identity = KeyHelper.generateIdentityKeyPair()
     await storage.clear_session_store()

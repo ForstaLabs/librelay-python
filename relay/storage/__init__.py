@@ -1,11 +1,13 @@
 
-import axolotl
+import base64
 import json
 import logging
 import os
 import re
-from .. import util
 from . import backing
+from .. import util
+from axolotl.identitykey import IdentityKey
+from axolotl.identitykeypair import IdentityKeyPair
 
 logger = logging.getLogger('storage')
 default_backing = os.environ.get('RELAY_STORAGE_BACKING', 'fs')
@@ -26,7 +28,7 @@ def encode(obj):
     o = {}
     if isinstance(obj, bytes):
         o['encoding'] = 'bytes'
-        o['data'] = obj
+        o['data'] = base64.b64encode(obj).decode()
     else:
         o['data'] = obj
     return json.dumps(o)
@@ -36,7 +38,7 @@ def decode(data):
     o = json.loads(data)
     encoding = o.get('encoding')
     if encoding == 'bytes':
-        return o['data'].encode()
+        return base64.b64decode(o['data'])
     elif encoding:
         raise TypeError("Unsupported encoding: " + encoding)
     else:
@@ -89,18 +91,22 @@ async def remove_state(key):
 
 
 async def get_our_identity():
+    # XXX
     return {
-        "pubkey": await get_state('our_identitykey.pub'),
+        "pubkey": await get_state('our_identitykeyb'),
         "privkey": await get_state('our_identitykey.priv')
     }
 
 
 async def save_our_identity(keypair):
-    await put_state('our_identitykey.pub', keypair.pubkey)
-    await put_state('our_identitykey.priv', keypair.privkey)
+    # XXX
+    import pdb;pdb.set_trace()
+    await put_state('our_identitykey.pub', keypair.publicKey)
+    await put_state('our_identitykey.priv', keypair.privateKey)
 
 
 async def remove_our_identity():
+    # XXX
     await remove_state('our_identitykey.pub')
     await remove_state('our_identitykey.priv')
 
@@ -110,6 +116,7 @@ async def get_our_registration_id():
 
 
 async def load_prekey(keyId):
+    # XXX
     if await _backing.has(prekey_ns, keyId + '.pub'):
         return {
             "pubkey": await get(prekey_ns, keyId + '.pub'),
@@ -118,6 +125,7 @@ async def load_prekey(keyId):
 
 
 async def store_prekey(keyId, keypair):
+    # XXX
     await _set(prekey_ns, keyId + '.priv', keypair.privkey)
     await _set(prekey_ns, keyId + '.pub', keypair.pubkey)
 
@@ -134,6 +142,7 @@ async def remove_prekey(keyId):
 
 
 async def load_signed_prekey(keyId):
+    # XXX
     if not await _backing.has(signed_prekey_ns, keyId + '.pub'):
         return
     return {
@@ -143,11 +152,13 @@ async def load_signed_prekey(keyId):
 
 
 async def store_signed_prekey(keyId, keypair):
+    # XXX
     await _set(signed_prekey_ns, keyId + '.priv', keypair.privkey)
     await _set(signed_prekey_ns, keyId + '.pub', keypair.pubkey)
 
 
 async def remove_signed_prekey(keyId):
+    # XXX
     await _backing.remove(signed_prekey_ns, keyId + '.pub')
     await _backing.remove(signed_prekey_ns, keyId + '.priv')
 
@@ -189,30 +200,33 @@ async def is_trusted_identity(identifier, publickey):
     if not identitykey:
         logger.warn("WARNING: Implicit trust of peer:", identifier)
         return True
-    return identitykey.equals(publickey)
+    import pdb;pdb.set_trace()
+    return identitykey == publickey  # XXX So wrong..
 
 
 async def load_identity(identifier):
     if not identifier:
         raise Exception("Tried to get identity key for undefined/null key")
-    addr = util.unencodeAddr(identifier)[0]
-    return await get(identitykey_ns, addr)
+    addr = util.unencode_addr(identifier)[0]
+    data = await get(identitykey_ns, addr)
+    return IdentityKey(serialized=data)
 
 
-async def save_identity(identifier, publickey):
+async def save_identity(identifier, identKey):
     """ Returns True if the key was updated. """
     if not identifier:
         raise TypeError("Tried to set identity key without key")
-    if not isinstance(publickey, bytes):
+    if not isinstance(identKey, IdentityKey):
         raise TypeError("Invalid type for save_identity")
-    addr = util.unencodeAddr(identifier)[0]
+    addr = util.unencode_addr(identifier)[0]
     existing = await get(identitykey_ns, addr)
-    await _set(identitykey_ns, addr, publickey)
-    return not not (existing and not existing.equals(publickey))
+    raw = identKey.serialize()
+    await _set(identitykey_ns, addr, raw)
+    return not not (existing and not existing != raw)
 
 
 async def remove_identity(identifier):
-    addr = util.unencodeAddr(identifier)[0]
+    addr = util.unencode_addr(identifier)[0]
     await _backing.remove(identitykey_ns, addr)
     await remove_all_sessions(addr)
 

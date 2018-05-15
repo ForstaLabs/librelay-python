@@ -1,8 +1,9 @@
 import aiohttp
+import asyncio
 import logging
 import re
 import urllib
-#from .. import protobufs
+from .. import protobufs
 from .. import storage
 from ..provisioning_cipher import ProvisioningCipher
 from axolotl.util.keyhelper import KeyHelper
@@ -39,7 +40,7 @@ class SignalClient(object):
                                                  raise_for_status=True)
 
     def __del__(self):
-        self._httpClient.close()
+        asyncio.get_event_loop().create_task(self._httpClient.close())
         self._httpClient = None
 
     @classmethod

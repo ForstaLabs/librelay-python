@@ -12,8 +12,8 @@ from .websocket_resource import WebSocketResource
 
 
 logger = logging.getLogger(__name__)
-ENV_TYPES = protobufs.Envelope.lookup('Type').values
-DATA_FLAGS = protobufs.DataMessage.lookup('Flags').values
+ENV_TYPES = dict(protobufs.Envelope.Type.items())
+DATA_FLAGS = dict(protobufs.DataMessage.Flags.items())
 
 
 class MessageReceiver(eventing.EventTarget):
@@ -139,7 +139,7 @@ class MessageReceiver(eventing.EventTarget):
 
     async def handle_envelope(self, envelope, reentrant=True):
         handler = None
-        if envelope.type == ENV_TYPES.RECEIPT:
+        if envelope.type == ENV_TYPES['RECEIPT']:
             handler = self.handle_delivery_receipt
         elif envelope.content:
             handler = self.handle_content_message
@@ -185,9 +185,9 @@ class MessageReceiver(eventing.EventTarget):
         addr = libsignal.SignalProtocolAddress(envelope.source,
                                                          envelope.sourceDevice)
         sessionCipher = libsignal.SessionCipher(storage, addr)
-        if envelope.type == ENV_TYPES.CIPHERTEXT:
+        if envelope.type == ENV_TYPES['CIPHERTEXT']:
             return self.unpad(await sessionCipher.decryptWhisperMessage(ciphertext))
-        elif envelope.type == ENV_TYPES.PREKEY_BUNDLE:
+        elif envelope.type == ENV_TYPES['PREKEY_BUNDLE']:
             return await self.decryptPreKeyWhisperMessage(ciphertext, sessionCipher, addr)
         raise Exception("Unknown message type")
 
@@ -203,7 +203,7 @@ class MessageReceiver(eventing.EventTarget):
             raise e
 
     async def handle_sent_message(self, sent, envelope):
-        if sent.message.flags & DATA_FLAGS.END_SESSION:
+        if sent.message.flags & DATA_FLAGS['END_SESSION']:
             await self.handle_end_session(sent.destination)
         await self.process_decrypted(sent.message, self.addr)
         ev = eventing.Event('sent')
@@ -219,7 +219,7 @@ class MessageReceiver(eventing.EventTarget):
         await self.dispatch_event(ev)
 
     async def handle_data_message(self, message, envelope, content):
-        if message.flags & DATA_FLAGS.END_SESSION:
+        if message.flags & DATA_FLAGS['END_SESSION']:
             await self.handle_end_session(envelope.source)
         await self.process_decrypted(message, envelope.source)
         ev = eventing.Event('message')
@@ -311,7 +311,7 @@ class MessageReceiver(eventing.EventTarget):
             msg.flags = 0
         if msg.expireTimer is None:
             msg.expireTimer = 0
-        if msg.flags & DATA_FLAGS.END_SESSION:
+        if msg.flags & DATA_FLAGS['END_SESSION']:
             return msg
         if msg.group:
             # We should blow up here very soon. XXX

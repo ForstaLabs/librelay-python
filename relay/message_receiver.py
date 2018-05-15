@@ -1,20 +1,16 @@
-// vim: ts=4:sw=4:expandtab
-
-'use strict';
-
-const WebSocketResource = require('./websocket_resource');
-const crypto = require('./crypto');
-const errors = require('./errors');
-const eventing = require('./eventing');
-const hub = require('./hub');
-const libsignal = require('libsignal');
-const protobufs = require('./protobufs');
-const queueAsync = require('./queue_async');
-const storage = require('./storage');
+#WebSocketResource = require('./websocket_resource');
+from . import crypto
+errors = require('./errors');
+eventing = require('./eventing');
+hub = require('./hub');
+libsignal = require('libsignal');
+protobufs = require('./protobufs');
+queueAsync = require('./queue_async');
+storage = require('./storage');
 
 
-const ENV_TYPES = protobufs.Envelope.lookup('Type').values;
-const DATA_FLAGS = protobufs.DataMessage.lookup('Flags').values;
+ENV_TYPES = protobufs.Envelope.lookup('Type').values;
+DATA_FLAGS = protobufs.DataMessage.lookup('Flags').values;
 
 
 class MessageReceiver extends eventing.EventTarget {
@@ -27,7 +23,7 @@ class MessageReceiver extends eventing.EventTarget {
         this.deviceId = deviceId;
         this.signalingKey = signalingKey;
         if (!noWebSocket) {
-            const url = this.signal.getMessageWebSocketURL();
+            url = this.signal.getMessageWebSocketURL();
             this.wsr = new WebSocketResource(url, {
                 handleRequest: request => queueAsync(this, this.handleRequest.bind(this, request)),
                 keepalive: {
@@ -41,10 +37,10 @@ class MessageReceiver extends eventing.EventTarget {
     }
 
     static async factory(noWebSocket) {
-        const signal = await hub.SignalClient.factory();
-        const addr = await storage.getState('addr');
-        const deviceId = await storage.getState('deviceId');
-        const signalingKey = await storage.getState('signalingKey');
+        signal = await hub.SignalClient.factory();
+        addr = await storage.getState('addr');
+        deviceId = await storage.getState('deviceId');
+        signalingKey = await storage.getState('signalingKey');
         return new this(signal, addr, deviceId, signalingKey, noWebSocket);
     }
 
@@ -54,7 +50,7 @@ class MessageReceiver extends eventing.EventTarget {
             await this.signal.getDevices();
         } catch(e) {
             console.error("Invalid network state:", e);
-            const ev = new eventing.Event('error');
+            ev = new eventing.Event('error');
             ev.error = e;
             await this.dispatchEvent(ev);
         }
@@ -68,7 +64,7 @@ class MessageReceiver extends eventing.EventTarget {
             console.warn("Duplicate connect detected");
         } else {
             this._connecting = (async () => {
-                let attempts = 0;
+                attempts = 0;
                 while (!this._closing) {
                     try {
                         await this.wsr.connect();
@@ -97,12 +93,12 @@ class MessageReceiver extends eventing.EventTarget {
         if (this.wsr) {
             throw new TypeError("Fetch is invalid when websocket is in use");
         }
-        let more;
+        more = None
         do {
-            const data = await this.signal.request({call: 'messages'});
+            data = await this.signal.request({call: 'messages'});
             more = data.more;
-            const deleting = [];
-            for (const envelope of data.messages) {
+            deleting = [];
+            for (envelope of data.messages) {
                 if (envelope.content) {
                     envelope.content = Buffer.from(envelope.content, 'base64');
                 }
@@ -145,16 +141,16 @@ class MessageReceiver extends eventing.EventTarget {
             request.respond(400, 'Invalid Resource');
             throw new Error('Invalid WebSocket resource received');
         }
-        let envelope;
+        envelope = None
         try {
-            const data = crypto.decryptWebsocketMessage(Buffer.from(request.body),
+            data = crypto.decryptWebsocketMessage(Buffer.from(request.body),
                                                         this.signalingKey);
             envelope = protobufs.Envelope.toObject(protobufs.Envelope.decode(data));
             envelope.timestamp = envelope.timestamp.toNumber();
         } catch(e) {
             console.error("Error handling incoming message:", e);
             request.respond(500, 'Bad encrypted websocket message');
-            const ev = new eventing.Event('error');
+            ev = new eventing.Event('error');
             ev.error = e;
             await this.dispatchEvent(ev);
             throw e;
@@ -167,7 +163,7 @@ class MessageReceiver extends eventing.EventTarget {
     }
 
     async handleEnvelope(envelope, reentrant) {
-        let handler;
+        handler = None
         if (envelope.type === ENV_TYPES.RECEIPT) {
             handler = this.handleDeliveryReceipt;
         } else if (envelope.content) {
@@ -192,7 +188,7 @@ class MessageReceiver extends eventing.EventTarget {
             } else if (e instanceof errors.RelayError) {
                 console.warn("Supressing RelayError:", e);
             } else {
-                const ev = new eventing.Event('error');
+                ev = new eventing.Event('error');
                 ev.error = e;
                 ev.proto = envelope;
                 await this.dispatchEvent(ev);
@@ -202,13 +198,13 @@ class MessageReceiver extends eventing.EventTarget {
     }
 
     async handleDeliveryReceipt(envelope) {
-        const ev = new eventing.Event('receipt');
+        ev = new eventing.Event('receipt');
         ev.proto = envelope;
         await this.dispatchEvent(ev);
     }
 
     unpad(buf) {
-        for (let i = buf.byteLength - 1; i >= 0; i--) {
+        for (i = buf.byteLength - 1; i >= 0; i--) {
             if (buf[i] == 0x80) {
                 return buf.slice(0, i);
             } else if (buf[i] !== 0x00) {
@@ -219,9 +215,9 @@ class MessageReceiver extends eventing.EventTarget {
     }
 
     async decrypt(envelope, ciphertext) {
-        const addr = new libsignal.SignalProtocolAddress(envelope.source,
+        addr = new libsignal.SignalProtocolAddress(envelope.source,
                                                          envelope.sourceDevice);
-        const sessionCipher = new libsignal.SessionCipher(storage, addr);
+        sessionCipher = new libsignal.SessionCipher(storage, addr);
         if (envelope.type === ENV_TYPES.CIPHERTEXT) {
             return this.unpad(await sessionCipher.decryptWhisperMessage(ciphertext));
         } else if (envelope.type === ENV_TYPES.PREKEY_BUNDLE) {
@@ -247,7 +243,7 @@ class MessageReceiver extends eventing.EventTarget {
             await this.handleEndSession(sent.destination);
         }
         await this.processDecrypted(sent.message, this.addr);
-        const ev = new eventing.Event('sent');
+        ev = new eventing.Event('sent');
         ev.data = {
             source: envelope.source,
             sourceDevice: envelope.sourceDevice,
@@ -266,7 +262,7 @@ class MessageReceiver extends eventing.EventTarget {
             await this.handleEndSession(envelope.source);
         }
         await this.processDecrypted(message, envelope.source);
-        const ev = new eventing.Event('message');
+        ev = new eventing.Event('message');
         ev.data = {
             timestamp: envelope.timestamp,
             source: envelope.source,
@@ -278,16 +274,16 @@ class MessageReceiver extends eventing.EventTarget {
     }
 
     async handleLegacyMessage(envelope) {
-        const data = await this.decrypt(envelope, envelope.legacyMessage);
-        const messageProto = protobufs.DataMessage.decode(data);
-        const message = protobufs.DataMessage.toObject(messageProto);
+        data = await this.decrypt(envelope, envelope.legacyMessage);
+        messageProto = protobufs.DataMessage.decode(data);
+        message = protobufs.DataMessage.toObject(messageProto);
         await this.handleDataMessage(message, envelope);
     }
 
     async handleContentMessage(envelope) {
-        const data = await this.decrypt(envelope, envelope.content);
-        const contentProto = protobufs.Content.decode(data);
-        const content = protobufs.Content.toObject(contentProto);
+        data = await this.decrypt(envelope, envelope.content);
+        contentProto = protobufs.Content.decode(data);
+        content = protobufs.Content.toObject(contentProto);
         if (content.syncMessage) {
             await this.handleSyncMessage(content.syncMessage, envelope, content);
         } else if (content.dataMessage) {
@@ -326,8 +322,8 @@ class MessageReceiver extends eventing.EventTarget {
     }
 
     async handleRead(read, envelope) {
-        for (const x of read) {
-            const ev = new eventing.Event('read');
+        for (x of read) {
+            ev = new eventing.Event('read');
             ev.timestamp = envelope.timestamp;
             ev.read = {
                 timestamp: x.timestamp.toNumber(),
@@ -344,18 +340,18 @@ class MessageReceiver extends eventing.EventTarget {
     }
 
     async handleAttachment(attachment) {
-        const encrypted = await this.signal.getAttachment(attachment.id.toString());
+        encrypted = await this.signal.getAttachment(attachment.id.toString());
         attachment.data = await crypto.decryptAttachment(encrypted, attachment.key);
     }
 
     tryMessageAgain(from, ciphertext) {
-        const address = libsignal.SignalProtocolAddress.fromString(from);
-        const sessionCipher = new libsignal.SessionCipher(storage, address);
+        address = libsignal.SignalProtocolAddress.fromString(from);
+        sessionCipher = new libsignal.SessionCipher(storage, address);
         console.warn('retrying prekey whisper message');
         return this.decryptPreKeyWhisperMessage(ciphertext, sessionCipher, address).then(function(plaintext) {
-            const finalMessageProto = protobufs.DataMessage.decode(plaintext);
-            const finalMessage = protobufs.DataMessage.toObject(finalMessageProto);
-            let p = Promise.resolve();
+            finalMessageProto = protobufs.DataMessage.decode(plaintext);
+            finalMessage = protobufs.DataMessage.toObject(finalMessageProto);
+            p = Promise.resolve();
             if ((finalMessage.flags & DATA_FLAGS.END_SESSION) == DATA_FLAGS.END_SESSION &&
                 finalMessage.sync !== null) {
                     p = this.handleEndSession(address.getName());
@@ -367,10 +363,10 @@ class MessageReceiver extends eventing.EventTarget {
     }
 
     async handleEndSession(addr) {
-        const deviceIds = await storage.getDeviceIds(addr);
+        deviceIds = await storage.getDeviceIds(addr);
         await Promise.all(deviceIds.map(deviceId => {
-            const address = new libsignal.SignalProtocolAddress(addr, deviceId);
-            const sessionCipher = new libsignal.SessionCipher(storage, address);
+            address = new libsignal.SignalProtocolAddress(addr, deviceId);
+            sessionCipher = new libsignal.SessionCipher(storage, address);
             console.warn('Closing session for', addr, deviceId);
             return sessionCipher.closeOpenSessionForDevice();
         }));

@@ -5,7 +5,7 @@ class RelayError(Exception):
 class IdentityKeyError(RelayError):
 
     def __init__(self, addr, key):
-        self.identityKey = key;
+        self.identitykey = key;
         self.addr = addr.split('.')[0];
         message = f"The identity of {self.addr} has changed"
         super().__init__(message)

@@ -1,5 +1,4 @@
-'use strict';
-
+import protobufs
 const protobuf = require('protobufjs');
 
 

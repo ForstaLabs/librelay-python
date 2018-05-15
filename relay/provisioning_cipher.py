@@ -4,6 +4,11 @@ Device onboarding protocol
 
 from . import protobufs
 from axolotl.ecc.curve import Curve
+from axolotl.ecc.eckeypair import ECKeyPair
+from axolotl.ecc.djbec import DjbECPublicKey, DjbECPrivateKey
+from axolotl.kdf.hkdf import HKDF
+from axolotl.protocol.whispermessage import WhisperMessage
+from axolotl.sessioncipher import AESCipher
 
 
 class ProvisioningCipher(object):
@@ -17,24 +22,27 @@ class ProvisioningCipher(object):
         mac = message[-32:]
         ivAndCiphertext = message[:-32]
         ciphertext = message[16 + 1:-32]
-        ecRes = curve.calculateAgreement(masterEphemeral, self.keypair.privKey)
-        keys = crypto.HKDF(ecRes, Buffer.alloc(32), "TextSecure Provisioning Message")
-        await libsignal.crypto.verifyMAC(ivAndCiphertext, keys[1], mac, 32)
-        plaintext = await libsignal.crypto.decrypt(keys[0], ciphertext, iv)
+        ecRes = Curve.calculateAgreement(masterEphemeral, self.keypair.privateKey)
+        keys = HKDF.createFor(3).deriveSecrets(ecRes, "TextSecure Provisioning Message", 64)
+        wm = WhisperMessage()
+        wm.verifyMAC(1, ivAndCiphertext, keys[1], mac)
+        plaintext = AESCipher(keys[0], iv).decrypt(ciphertext)
         provisionMessage = protobufs.ProvisionMessage.decode(plaintext)
-        privKey = provisionMessage.identityKeyPrivate
+        privateKey = provisionMessage.identityKeyPrivate
+        publicKey = Curve.generatePublicKey(privateKey)
         return {
-            identityKeyPair: libsignal.crypto.createKeyPair(privKey),
-            addr: provisionMessage.addr,
-            provisioningCode: provisionMessage.provisioningCode,
-            userAgent: provisionMessage.userAgent
+            "identityKeyPair": ECKeyPair(DjbECPublicKey(publicKey),
+                                         DjbECPrivateKey(privateKey)),
+            "addr": provisionMessage.addr,
+            "provisioningCode": provisionMessage.provisioningCode,
+            "userAgent": provisionMessage.userAgent
         }
 
     async def encrypt(self, theirPublicKey, message):
-        assert(theirPublicKey instanceof Buffer)
-        ourKeyPair = libsignal.crypto.generateKeyPair()
-        sharedSecret = libsignal.crypto.calculateAgreement(theirPublicKey,
-                                                                 ourKeyPair.privKey)
+        ourKeyPair = Curve.generateKeyPair()
+        sharedSecret = Curve.calculateAgreement(theirPublicKey,
+                                                ourKeyPair.privateKey)
+        '''
         derivedSecret = await libsignal.crypto.HKDF(sharedSecret, Buffer.alloc(32),
             Buffer.from("TextSecure Provisioning Message"))
         ivLen = 16
@@ -52,10 +60,11 @@ class ProvisioningCipher(object):
         pEnvelope.body = Uint8Array(data.byteLength + macLen)
         pEnvelope.body.set(data, 0)
         pEnvelope.body.set(Uint8Array(mac), data.byteLength)
-        pEnvelope.publicKey = ourKeyPair.pubKey
+        pEnvelope.publicKey = ourKeyPair.publicKey
         return pEnvelope
+        '''
 
-    def get_publickey() {
+    def get_publickey(self):
         if not self.keypair:
-            self.keypair = crypto.generateKeyPair()
-        return self.keypair.pubKey
+            self.keypair = Curve.generateKeyPair()
+        return self.keypair.publicKey

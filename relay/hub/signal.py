@@ -5,7 +5,7 @@ import urllib
 #from .. import protobufs
 from .. import storage
 from ..provisioning_cipher import ProvisioningCipher
-from axolotl.util import KeyHelper
+from axolotl.util.keyhelper import KeyHelper
 from base64 import b64decode, b64encode
 
 logger = logging.getLogger(__name__)
@@ -54,7 +54,7 @@ class SignalClient(object):
                                             urn='/provisioning/code')
         our_ident = await storage.get_our_identity()
         pMessage = protobufs.ProvisionMessage()
-        pMessage.identityKeyPrivate = our_ident.privKey
+        pMessage.identityKeyPrivate = our_ident.privateKey
         pMessage.addr = await storage.get_state('addr')
         pMessage.userAgent = userAgent
         pMessage.provisioningCode = provision_resp.verificationCode

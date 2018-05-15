@@ -3,13 +3,13 @@ import logging
 import secrets
 
 from .. import storage
-#from ..provisioning_cipher import ProvisioningCipher
+from ..provisioning_cipher import ProvisioningCipher
 #from ..websocket_resource import WebSocketResource
 from .atlas import AtlasClient
 from .signal import SignalClient
-from axolotl.util import KeyHelper
+from axolotl.util.keyhelper import KeyHelper
 
-logger = logging.getLoger(__name__)
+logger = logging.getLogger(__name__)
 default_name = 'librelay'
 
 
@@ -45,7 +45,7 @@ async def register_account(atlas_client=None, name=default_name):
     await storage.clear_session_store()
     await storage.remove_our_identity()
     await storage.remove_identity(addr)
-    await storage.save_identity(addr, identity.pubKey)
+    await storage.save_identity(addr, identity.publicKey)
     await storage.save_our_identity(identity)
     await storage.put_state('addr', addr)
     await storage.put_state('serverUrl', r['serverUrl'])
@@ -136,7 +136,7 @@ async def register_device(atlas_client=None, name=default_name,
         await storage.clear_session_store()
         await storage.remove_our_identity()
         await storage.remove_identity(addr)
-        await storage.save_identity(addr, identity.pubKey)
+        await storage.save_identity(addr, identity.publicKey)
         await storage.save_our_identity(identity)
         await storage.put_state('addr', addr)
         await storage.put_state('serverUrl', signalClient.url)

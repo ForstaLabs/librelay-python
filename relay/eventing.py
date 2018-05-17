@@ -29,7 +29,7 @@ class EventTarget(object):
     async def dispatchEvent(self, ev):
         if not isinstance(ev, Event):
             raise TypeError('Expects an event')
-        if not self._listeners or not self._listeners[ev.name]:
+        if not hasattr(self, '_listeners') or ev.name not in self._listeners:
             return
         for callback in self._listeners[ev.name]:
             try:
@@ -37,7 +37,7 @@ class EventTarget(object):
             except Exception:
                 logger.exception(f'Event Listener Exception [{ev.name}]:')
 
-    def add_event_listener(self, name, callback):
+    def addEventListener(self, name, callback):
         if not hasattr(self, '_listeners'):
             self._listeners = {}
         if name not in self._listeners:
@@ -45,7 +45,7 @@ class EventTarget(object):
         else:
             self._listeners[name].append(callback)
 
-    def remove_event_listener(self, name, callback):
+    def removeEventListener(self, name, callback):
         if name not in self._listeners:
             return
         self._listeners[name].remove(callback)

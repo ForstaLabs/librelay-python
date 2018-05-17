@@ -1,7 +1,21 @@
+import hashlib
+import hmac
 from axolotl.protocol.whispermessage import WhisperMessage
 from axolotl.sessioncipher import AESCipher
 
-def decryptWebsocketMessage(message, signaling_key):
+
+def sign(key, data):
+    m = hmac.new(key, digestmod=hashlib.sha256)
+    m.update(data)
+    return m.digest()
+
+
+def verifyMAC(data, key, mac, length):
+    calculated_mac = sign(key, data)
+    return mac[:length] == calculated_mac[:length]
+
+
+def decryptWebSocketMessage(message, signaling_key):
     """ Decrypts message into a raw string """
     if len(signaling_key) != 52:
         raise ValueError("Got invalid length signaling_key")
@@ -15,8 +29,7 @@ def decryptWebsocketMessage(message, signaling_key):
     ciphertext = message[1 + 16:-10]
     ivAndCiphertext = message[:-10]
     mac = message[-10:]
-    wm = WhisperMessage()
-    wm.verifyMAC(1, ivAndCiphertext, mac_key, mac)
+    verifyMAC(ivAndCiphertext, mac_key, mac, 10)
     return AESCipher(aes_key, iv).decrypt(ciphertext)
 
 

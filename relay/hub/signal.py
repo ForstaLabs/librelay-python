@@ -2,13 +2,12 @@ import aiohttp
 import asyncio
 import logging
 import re
-import urllib
-from .. import protobufs
 from .. import storage
 from ..provisioning_cipher import ProvisioningCipher
 from axolotl.util.keyhelper import KeyHelper
 from base64 import b64decode, b64encode
 
+store = storage.getStore()
 logger = logging.getLogger(__name__)
 
 SIGNAL_URL_CALLS = {
@@ -45,18 +44,18 @@ class SignalClient(object):
 
     @classmethod
     async def factory(cls):
-        url = await storage.get_state('server_url')
-        username = await storage.get_state('username')
-        password = await storage.get_state('password')
+        url = await store.getState('serverUrl')
+        username = await store.getState('username')
+        password = await store.getState('password')
         return cls(username, password, url)
 
-    async def link_device(self, uuid, pubkey, userAgent='librelay-python'):
+    async def linkDevice(self, uuid, pubkey, userAgent='librelay-python'):
         provision_resp = await self.request(call='devices',
                                             urn='/provisioning/code')
-        our_ident = await storage.get_our_identity()
+        our_ident = await store.getOurIdentity()
         pMessage = protobufs.ProvisionMessage()
-        pMessage.identityKeyPrivate = our_ident.privateKey
-        pMessage.addr = await storage.get_state('addr')
+        pMessage.identityKeyPrivate = our_ident.getPrivateKey().serialize()
+        pMessage.addr = await store.getState('addr')
         pMessage.userAgent = userAgent
         pMessage.provisioningCode = provision_resp.verificationCode
         provisioningCipher = ProvisioningCipher()
@@ -70,51 +69,49 @@ class SignalClient(object):
             if e.status != 404:
                 raise e
 
-    async def refresh_prekeys(self, minLevel=10, fill=100):
+    async def refreshPreKeys(self, minLevel=10, fill=100):
         preKeyCount = await self.getMyKeys()
         if preKeyCount <= minLevel:
             # The server replaces existing keys so just go to the hilt.
             logger.info("Refreshing pre-keys...")
-            await self.registerKeys(await self.generate_keys(fill))
+            await self.register_keys(await self.generate_keys(fill))
 
-    async def generate_keys(self, count=100, progressCallback=None):
-        start_id = await storage.get_state('max_prekey_id') or 1
-        signed_key_id = await storage.get_state('signed_key_id') or 1
-        our_ident = await storage.get_our_identity()
+    async def generateKeys(self, count=100):
+        startId = await store.getState('maxPreKeyId') or 1
+        signedKeyId = await store.getState('signedKeyId') or 1
+        ourIdent = await store.getOurIdentity()
         result = {
-            "prekeys": [],
-            "identity_key": our_ident.pubkey,
+            "identityKey": ourIdent.getPublicKey().serialize(),
+            "preKeys": []
         }
-        for key_id in range(start_id, start_id + count):
-            preKey = await KeyHelper.generatePreKey(key_id)
-            await storage.storePreKey(preKey.keyId, preKey.keyPair)
-            result.preKeys.push({
-                "keyId": preKey['keyId'],
-                "publicKey": preKey['keyPair']['pubkey']
+        preKeys = KeyHelper.generatePreKeys(startId, count)
+        for pk in preKeys:
+            await store.storePreKey(pk.getId(), pk)
+            result['preKeys'].append({
+                "keyId": pk.getId(),
+                "publicKey": pk.getKeyPair().getPublicKey().serialize()
             })
-            if progressCallback:
-                progressCallback(key_id - start_id)
-        sprekey = await KeyHelper.generateSignedPreKey(our_ident, signed_key_id)
-        await storage.storeSignedPreKey(sprekey.keyId, sprekey.keyPair)
-        result.signedPreKey = {
-            "keyId": sprekey['keyId'],
-            "publicKey": sprekey['keyPair']['pubkey'],
-            "signature": sprekey['signature']
+        signedPreKey = KeyHelper.generateSignedPreKey(ourIdent, signedKeyId)
+        await store.storeSignedPreKey(signedPreKey.getId(), signedPreKey)
+        result['signedPreKey'] = {
+            "keyId": signedPreKey.getId(),
+            "publicKey": signedPreKey.getKeyPair().getPublicKey().serialize(),
+            "signature": signedPreKey.getSignature()
         }
-        await storage.removeSignedPreKey(signed_key_id - 2)
-        await storage.putState('max_prekey_id', start_id + count)
-        await storage.putState('signed_key_id', signed_key_id + 1)
+        await store.removeSignedPreKey(signedKeyId - 2)
+        await store.putState('maxPreKeyId', startId + count)
+        await store.putState('signedKeyId', signedKeyId + 1)
         return result
 
-    def auth_header(self, username, password):
-        return 'Basic ' + b64encode(username + ':' + password)
+    def authHeader(self, username, password):
+        return 'Basic ' + b64encode(f'{username}:{password}'.encode()).decode()
 
     async def request(self, call=None, urn='', method='GET',
                       json=None, username=None, password=None):
         path = SIGNAL_URL_CALLS.get(call) + urn
         headers = {}
         if username and password:
-            headers['Authorization'] = self.auth_header(username, password)
+            headers['Authorization'] = self.authHeader(username, password)
         async with await self.fetch(path, method=method, json=json,
                                     headers=headers) as r:
             is_json = r.content_type.startswith('application/json')
@@ -134,59 +131,57 @@ class SignalClient(object):
         if headers is None:
             headers = {}
         if 'Authorization' not in headers and self.username and self.password:
-            headers['Authorization'] = self.auth_header(self.username,
-                                                        self.password)
+            headers['Authorization'] = self.authHeader(self.username,
+                                                       self.password)
         return self._httpClient.request(url=f'{self.url}/{urn.lstrip("/")}',
                                         headers=headers, **kwargs)
 
-    async def get_devices(self):
+    async def getDevices(self):
         data = await self.request(call='devices')
         return data and data['devices']
 
-    async def register_keys(self, keys):
+    async def registerKeys(self, keys):
         json = {}
-        json['identityKey'] = b64encode(keys['identityKey'])
+        json['identityKey'] = b64encode(keys['identityKey']).decode()
         json['signedPreKey'] = {
             "keyId": keys['signedPreKey']['keyId'],
-            "publicKey": b64encode(keys['signedPreKey']['publicKey']),
-            "signature": b64encode(keys['signedPreKey']['signature'])
+            "publicKey": b64encode(keys['signedPreKey']['publicKey']).decode(),
+            "signature": b64encode(keys['signedPreKey']['signature']).decode()
         }
-        json.preKeys = []
-        for pk in keys['prekeys']:
-            json.append({
-                "keyId": pk['keyId'],
-                "publicKey": b64encode(pk['publicKey'])
-            })
+        json['preKeys'] = [{
+            "keyId": pk['keyId'],
+            "publicKey": b64encode(pk['publicKey']).decode()
+        } for pk in keys['preKeys']]
         return await self.request(call='keys', method='PUT', json=json)
 
-    async def get_my_keys(self):
+    async def getMyKeys(self):
         res = await self.request(call='keys')
         return res.count
 
-    async def get_keys_for_addr(self, addr, device_id='*'):
+    async def getKeysForAddr(self, addr, device_id='*'):
         res = await self.request(call='keys',
                                  urn=f'/{addr}/{device_id}')
         res['identityKey'] = b64decode(res['identityKey'])
         for device in res['devices']:
             if device['preKey']:
                 device['preKey']['publicKey'] = b64decode(device['preKey']['publicKey'])
-            device['signedPreKey']['publicKey'] = b64encode(device['signedPreKey']['publicKey'])
-            device['signedPreKey']['signature'] = b64encode(device['signedPreKey']['signature'])
+            device['signedPreKey']['publicKey'] = b64decode(device['signedPreKey']['publicKey'])
+            device['signedPreKey']['signature'] = b64decode(device['signedPreKey']['signature'])
         return res
 
-    async def send_messages(self, destination, messages, timestamp):
+    async def sendMessages(self, destination, messages, timestamp):
         return await self.request(call='messages', method='PUT',
                                   urn='/' + destination,
                                   json={"messages": messages,
                                         "timestamp": timestamp})
 
-    async def get_attachment(self, id):
+    async def getAttachment(self, id):
         """ XXX Build in retry handling... """
         ptr_resp = await self.request(call='attachment', urn='/' + id)
         async with self._httpClient.get(ptr_resp['location']) as r:
             return await r.read()
 
-    async def put_attachment(self, body):
+    async def putAttachment(self, body):
         """ XXX Build in retry handling... """
         ptr_resp = await self.request(call='attachment')
         # Extract the id as a string from the location url
@@ -201,14 +196,13 @@ class SignalClient(object):
             pass
         return match[1]
 
-    def get_message_websocket_url(self):
+    def getMessageWebSocketUrl(self):
         return ''.join([
             self.url.replace('https://', 'wss://').replace('http://', 'ws://'),
-            '/v1/websocket/?login=', urllib.quote(self.username),
-            '&password=', urllib.quote(self.password)
+            f'/v1/websocket/?login={self.username}&password={self.password}'
         ])
 
-    def get_provisioning_websocket_url(self):
+    def getProvisioningWebSocketUrl(self):
         return self.url.replace('https://', 'wss://').replace('http://', 'ws://') + \
                                 '/v1/websocket/provisioning/'
 

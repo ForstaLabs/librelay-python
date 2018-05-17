@@ -21,7 +21,7 @@ class StorageInterface(object):
     async def remove(self, ns, key):
         raise NotImplementedError("Required impl by subclass");
 
-    async def keys(self, ns, regex):
+    async def keys(self, ns, regex=None):
         raise NotImplementedError("Required impl by subclass");
 
     async def shutdown(self):

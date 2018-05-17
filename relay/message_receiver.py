@@ -6,58 +6,51 @@ from . import errors
 from . import eventing
 from . import hub
 from . import protobufs
-from . import queue_async
 from . import storage
 from .websocket_resource import WebSocketResource
 
 
+store = storage.getStore()
 logger = logging.getLogger(__name__)
-ENV_TYPES = dict(protobufs.Envelope.Type.items())
-DATA_FLAGS = dict(protobufs.DataMessage.Flags.items())
 
 
 class MessageReceiver(eventing.EventTarget):
 
     def __init__(self, signal, addr, device_id, signaling_key, no_web_socket=False):
+        self._closing = False
+        self._closed = asyncio.Future()
+        self._connecting = None
         self.signal = signal
         self.addr = addr
         self.device_id = device_id
         self.signaling_key = signaling_key
         if not no_web_socket:
-            url = self.signal.get_message_websocket_url()
-            self.wsr = WebSocketResource(url, {
-                "handleRequest": lambda request: queue_async(self, self.handle_request),
-                "keepalive": {
-                    "path": '/v1/keepalive',
-                    "disconnect": True
-                }
-            })
-            self.wsr.addEventListener('close', self.on_socket_close.bind(self))
-            self.wsr.addEventListener('error', self.on_socket_error.bind(self))
+            url = self.signal.getMessageWebSocketUrl()
+            self.wsr = WebSocketResource(url, handleRequest=self.handleRequest)
 
     @classmethod
-    async def factory(cls, no_web_socket):
+    async def factory(cls, no_web_socket=False):
         signal = await hub.SignalClient.factory()
-        addr = await storage.get_state('addr')
-        device_id = await storage.get_state('device_id')
-        signaling_key = await storage.get_state('signaling_key')
+        addr = await store.getState('addr')
+        device_id = await store.getState('deviceId')
+        signaling_key = await store.getState('signalingKey')
         return cls(signal, addr, device_id, signaling_key, no_web_socket)
 
-    async def check_registration(self):
+    async def checkRegistration(self):
         try:
             # possible auth or network issue. Make a request to confirm
-            await self.signal.get_devices()
+            await self.signal.getDevices()
         except Exception as e:
             logger.exception("Invalid network state")
             ev = eventing.Event('error')
             ev.error = e
-            await self.dispatch_event(ev)
+            await self.dispatchEvent(ev)
 
     async def connect(self):
         if self._closing:
-            raise Exception("Invalid State: Already Closed")
+            raise RuntimeError("Invalid State: Already Closed")
         if self._connecting:
-            logger.warn("Duplicate connect detected")
+            logger.warning("Duplicate connect detected")
         else:
             async def _connect():
                 attempts = 0
@@ -68,16 +61,26 @@ class MessageReceiver(eventing.EventTarget):
                             logger.info("Reconnected websocket")
                         return
                     except Exception as e:
-                        await self.check_registration()
-                        logger.warn(f'Connect problem ({attempts} attempts)')
+                        await self.checkRegistration()
+                        logger.exception('CONNECT ERROR')  # XXX 
+                        logger.warning(f'Connect problem ({attempts} attempts)')
                     attempts += 1
             self._connecting = _connect()
         await self._connecting
         self._connecting = None
 
-    def close(self):
-        self._closing = True
-        self.wsr.close()
+    async def close(self):
+        try:
+            self._closing = True
+            wsr = self.wsr
+            self.wsr = None
+            await wsr.close()
+        finally:
+            self._closed.set_result(None)
+
+    async def closed(self):
+        """ Block until we are manually closed. """
+        await self._closed
 
     async def drain(self):
         """ Pop messages directly from the messages API until it's empty. """
@@ -93,85 +96,86 @@ class MessageReceiver(eventing.EventTarget):
                     envelope.content = base64.b64decode(envelope.content)
                 if envelope.message:
                     envelope.legacyMessage = base64.b64decode(envelope.message)
-                await self.handle_envelope(envelope)
+                await self.handleEnvelope(envelope)
                 deleting.append(self.signal.request(call='messages',
                     method='DELETE',
                     urn=f'/{envelope.source}/{envelope.timestamp}'))
             await asyncio.gather(deleting)
 
-    def on_socket_error(self, ev):
-        logger.warn('Message Receiver WebSocket error:', ev)
+    def onSocketError(self, ev):
+        # XXX wire in without callback
+        logger.warning('Message Receiver WebSocket error:', ev)
 
-    async def on_socket_close(self, ev):
+    async def onSocketClose(self, ev):
+        # XXX wire in without callback
         if self._closing:
             return
-        logger.warn('Websocket closed:', ev.code, ev.reason or '')
-        await self.check_registration()
+        logger.warning('Websocket closed:', ev.code, ev.reason or '')
+        await self.checkRegistration()
         if not self._closing:
             await self.connect()
 
-    async def handle_request(self, request):
+    async def handleRequest(self, request):
         if request.path == '/api/v1/queue/empty':
             logger.debug("WebSocket queue empty")
-            request.respond(200, 'OK')
+            await request.respond(200, 'OK')
             return
         elif request.path != '/api/v1/message' or request.verb != 'PUT':
             logger.error("Expected PUT /message instead of:", request)
-            request.respond(400, 'Invalid Resource')
+            await request.respond(400, 'Invalid Resource')
             raise Exception('Invalid WebSocket resource received')
         envelope = None
         try:
-            data = crypto.decrypt_websocket_message(request.body,
-                                                    self.signaling_key)
-            envelope = protobufs.Envelope.toObject(protobufs.Envelope.decode(data))
-            envelope.timestamp = envelope.timestamp.toNumber()
+            data = crypto.decryptWebSocketMessage(request.body, self.signaling_key)
+            envelope = protobufs.Envelope()
+            envelope.ParseFromString(data)
         except Exception as e:
-            logger.error("Error handling incoming message:", e)
-            request.respond(500, 'Bad encrypted websocket message')
+            logger.exception("Error handling incoming message")
+            await request.respond(500, 'Bad encrypted websocket message')
             ev = eventing.Event('error')
             ev.error = e
-            await self.dispatch_event(ev)
+            await self.dispatchEvent(ev)
             raise e
         try:
-            await self.handle_envelope(envelope)
+            await self.handleEnvelope(envelope)
         finally:
-            request.respond(200, 'OK')
+            await request.respond(200, 'OK')
 
-    async def handle_envelope(self, envelope, reentrant=True):
+    async def handleEnvelope(self, envelope, reentrant=True):
         handler = None
-        if envelope.type == ENV_TYPES['RECEIPT']:
-            handler = self.handle_delivery_receipt
+        if envelope.type == envelope.RECEIPT:
+            handler = self.handleDeliveryReceipt
         elif envelope.content:
-            handler = self.handle_content_message
+            handler = self.handleContentMessage
         elif envelope.legacyMessage:
-            handler = self.handle_legacy_message
+            handler = self.handleLegacyMessage
         else:
             raise Exception('Received message with no content and no legacyMessage')
         try:
             await handler.call(self, envelope)
-        except errors.MessageCounterError:  #  XXX Where who do dem?
-            logger.warn("Ignoring MessageCounterError for:", envelope)
-            return
-        except errors.IncomingIdentityKeyError:
+        #except errors.MessageCounterError:  #  XXX Where who do dem?
+        #    logger.warning("Ignoring MessageCounterError for:", envelope)
+        #    return
+        except errors.IncomingIdentityKeyError as e:
             if reentrant:
                 raise
-            await self.dispatch_event(eventing.KeyChangeEvent(e))
+            await self.dispatchEvent(eventing.KeyChangeEvent(e))
             if e.accepted:
                 envelope.keyChange = True
-                return await self.handle_envelope(envelope, reentrant=True)
+                return await self.handleEnvelope(envelope, reentrant=True)
         except errors.RelayError as e:
-            logger.warn("Supressing RelayError:", e)
+            logger.warning("Supressing RelayError:", e)
         except Exception as e:
             ev = eventing.Event('error')
             ev.error = e
             ev.proto = envelope
-            await self.dispatch_event(ev)
+            await self.dispatchEvent(ev)
             raise
 
-    async def handle_delivery_receipt(self, envelope):
+    async def handleDeliveryReceipt(self, envelope):
         ev = eventing.Event('receipt')
         ev.proto = envelope
-        await self.dispatch_event(ev)
+        await self.dispatchEvent(ev)
 
     def unpad(self, buf):
         for i in range(len(buf) - 1, -1, -1):
@@ -184,10 +188,10 @@ class MessageReceiver(eventing.EventTarget):
     async def decrypt(self, envelope, ciphertext):
         addr = libsignal.SignalProtocolAddress(envelope.source,
                                                          envelope.sourceDevice)
-        sessionCipher = libsignal.SessionCipher(storage, addr)
-        if envelope.type == ENV_TYPES['CIPHERTEXT']:
+        sessionCipher = libsignal.SessionCipher(store, addr)
+        if envelope.type == envelope.CIPHERTEXT:
             return self.unpad(await sessionCipher.decryptWhisperMessage(ciphertext))
-        elif envelope.type == ENV_TYPES['PREKEY_BUNDLE']:
+        elif envelope.type == envelope.PREKEY_BUNDLE:
             return await self.decryptPreKeyWhisperMessage(ciphertext, sessionCipher, addr)
         raise Exception("Unknown message type")
 
@@ -202,26 +206,26 @@ class MessageReceiver(eventing.EventTarget):
                                                       e.identitykey)
             raise e
 
-    async def handle_sent_message(self, sent, envelope):
-        if sent.message.flags & DATA_FLAGS['END_SESSION']:
-            await self.handle_end_session(sent.destination)
-        await self.process_decrypted(sent.message, self.addr)
+    async def handleSentMessage(self, sent, envelope):
+        if sent.message.flags & sent.message.END_SESSION:
+            await self.handleEndSession(sent.destination)
+        await self.processDecrypted(sent.message, self.addr)
         ev = eventing.Event('sent')
         ev.data = {
-            source: envelope.source,
-            sourceDevice: envelope.sourceDevice,
-            timestamp: sent.timestamp.toNumber(),
-            destination: sent.destination,
-            message: sent.message
+            "source": envelope.source,
+            "sourceDevice": envelope.sourceDevice,
+            "timestamp": sent.timestamp,
+            "destination": sent.destination,
+            "message": sent.message
         }
         if sent.expirationStartTimestamp:
-          ev.data.expirationStartTimestamp = sent.expirationStartTimestamp.toNumber()
-        await self.dispatch_event(ev)
+          ev.data.expirationStartTimestamp = sent.expirationStartTimestamp
+        await self.dispatchEvent(ev)
 
-    async def handle_data_message(self, message, envelope, content):
-        if message.flags & DATA_FLAGS['END_SESSION']:
-            await self.handle_end_session(envelope.source)
-        await self.process_decrypted(message, envelope.source)
+    async def handleDataMessage(self, message, envelope, content):
+        if message.flags & message.END_SESSION:
+            await self.handleEndSession(envelope.source)
+        await self.processDecrypted(message, envelope.source)
         ev = eventing.Event('message')
         ev.data = {
             "timestamp": envelope.timestamp,
@@ -230,34 +234,34 @@ class MessageReceiver(eventing.EventTarget):
             "message": message,
             "keyChange": envelope.keyChange
         }
-        await self.dispatch_event(ev)
+        await self.dispatchEvent(ev)
 
-    async def handle_legacy_message(self, envelope):
+    async def handleLegacyMessage(self, envelope):
         data = await self.decrypt(envelope, envelope.legacyMessage)
-        messageProto = protobufs.DataMessage.decode(data)
-        message = protobufs.DataMessage.toObject(messageProto)
-        await self.handle_data_message(message, envelope)
+        message = protobufs.DataMessage()
+        message.ParseFromString(data)
+        await self.handleDataMessage(message, envelope)
 
-    async def handle_content_message(self, envelope):
+    async def handleContentMessage(self, envelope):
         data = await self.decrypt(envelope, envelope.content)
-        contentProto = protobufs.Content.decode(data)
-        content = protobufs.Content.toObject(contentProto)
+        content = protobufs.Content()
+        content.ParseFromString(data)
         if content.syncMessage:
-            await self.handle_sync_message(content.syncMessage, envelope, content)
+            await self.handleSyncMessage(content.syncMessage, envelope, content)
         elif content.dataMessage:
-            await self.handle_data_message(content.dataMessage, envelope, content)
+            await self.handleDataMessage(content.dataMessage, envelope, content)
         else:
             raise TypeError('Got content message with no dataMessage or syncMessage')
 
-    async def handle_sync_message(self, message, envelope, content):
+    async def handleSyncMessage(self, message, envelope, content):
         if envelope.source != self.addr:
             raise ReferenceError('Received sync message from another addr')
         if envelope.sourceDevice == self.device_id:
             raise ReferenceError('Received sync message from our own device')
         if message.sent:
-            await self.handle_sent_message(message.sent, envelope)
+            await self.handleSentMessage(message.sent, envelope)
         elif message.read:
-            await self.handle_read(message.read, envelope)
+            await self.handleRead(message.read, envelope)
         elif message.contacts:
             logger.error("Deprecated contact sync message:", message, envelope, content)
             raise TypeError('Deprecated contact sync message')
@@ -265,7 +269,7 @@ class MessageReceiver(eventing.EventTarget):
             logger.error("Deprecated group sync message:", message, envelope, content)
             raise TypeError('Deprecated group sync message')
         elif message.blocked:
-            self.handle_blocked(message.blocked, envelope)
+            self.handleBlocked(message.blocked, envelope)
         elif message.request:
             logger.error("Deprecated group request sync message:", message, envelope, content)
             raise TypeError('Deprecated group request sync message')
@@ -273,36 +277,36 @@ class MessageReceiver(eventing.EventTarget):
             logger.error("Empty sync message:", message, envelope, content)
             raise TypeError('Empty SyncMessage')
 
-    async def handle_read(self, read, envelope):
+    async def handleRead(self, read, envelope):
         for x in read:
             ev = eventing.Event('read')
             ev.timestamp = envelope.timestamp
             ev.read = {
-                "timestamp": x.timestamp.toNumber(),
+                "timestamp": x.timestamp,
                 "sender": x.sender,
                 "source": envelope.source,
                 "sourceDevice": envelope.sourceDevice
             }
-            await self.dispatch_event(ev)
+            await self.dispatchEvent(ev)
 
-    def handle_blocked(self, blocked):
+    def handleBlocked(self, blocked):
         raise Exception("UNSUPPORTRED")
 
-    async def handle_attachment(self, attachment):
-        encrypted = await self.signal.get_attachment(attachment.id)
-        attachment.data = await crypto.decrypt_attachment(encrypted,
+    async def handleAttachment(self, attachment):
+        encrypted = await self.signal.getAttachment(attachment.id)
+        attachment.data = await crypto.decryptAttachment(encrypted,
                                                           attachment.key)
 
-    async def handle_end_session(self, addr):
-        device_ids = await storage.get_device_ids(addr)
+    async def handleEndSession(self, addr):
+        device_ids = await store.getDeviceIds(addr)
         jobs = []
         for device_id in device_ids:
             address = libsignal.SignalProtocolAddress(addr, device_id)
-            sessionCipher = libsignal.SessionCipher(storage, address)
-            logger.warn('Closing session for', addr, device_id)
+            sessionCipher = libsignal.SessionCipher(store, address)
+            logger.warning('Closing session for', addr, device_id)
             sessionCipher.closeOpenSessionForDevice()
 
-    async def process_decrypted(self, msg, source):
+    async def processDecrypted(self, msg, source):
         """ Now that its decrypted, validate the message and clean it up for
         consumer processing.  Note that messages may (generally) only perform
         one action and we ignore remaining fields after the first action. """
@@ -311,11 +315,11 @@ class MessageReceiver(eventing.EventTarget):
             msg.flags = 0
         if msg.expireTimer is None:
             msg.expireTimer = 0
-        if msg.flags & DATA_FLAGS['END_SESSION']:
+        if msg.flags & msg.END_SESSION:
             return msg
         if msg.group:
             # We should blow up here very soon. XXX
             logger.error("Legacy group message detected", msg)
         if msg.attachments:
-            await asyncio.gather(map(self.handle_attachment, msg.attachments))
+            await asyncio.gather(map(self.handleAttachment, msg.attachments))
         return msg

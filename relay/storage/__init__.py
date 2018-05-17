@@ -1,266 +1,216 @@
+"""
+Modular axolotl storage interface.
+"""
 
+import asyncio
 import base64
 import json
 import logging
 import os
 import re
 from . import backing
-from .. import util
 from axolotl.identitykey import IdentityKey
 from axolotl.identitykeypair import IdentityKeyPair
+from axolotl.invalidkeyidexception import InvalidKeyIdException
+from axolotl.state.axolotlstore import AxolotlStore
+from axolotl.state.prekeyrecord import PreKeyRecord
+from axolotl.state.sessionrecord import SessionRecord
+from axolotl.state.signedprekeyrecord import SignedPreKeyRecord
 
-logger = logging.getLogger('storage')
-default_backing = os.environ.get('RELAY_STORAGE_BACKING', 'fs')
-
-state_ns = 'state'
-session_ns = 'session'
-prekey_ns = 'prekey'
-signed_prekey_ns = 'signedprekey'
-identitykey_ns = 'identitykey'
+logger = logging.getLogger(__name__)
 
 
-_backing = None
-_Backing = None
-_label = 'default'
+class BackingStore(AxolotlStore):
+    """ A modular store that supports pluggable backends like filesystem,
+    databases. etc. """
 
+    state_ns = 'state'
+    session_ns = 'session'
+    prekey_ns = 'prekey'
+    signed_prekey_ns = 'signedprekey'
+    identitykey_ns = 'identitykey'
 
-def encode(obj):
-    o = {}
-    if isinstance(obj, bytes):
-        o['encoding'] = 'bytes'
-        o['data'] = base64.b64encode(obj).decode()
-    else:
-        o['data'] = obj
-    return json.dumps(o)
+    def __init__(self, backing=None, label='default'):
+        if backing is None:
+            b = os.environ.get('RELAY_STORAGE_BACKING', 'fs')
+            backing = self.getBackingClass(b)(label)
+        self._backing = backing
 
+    async def initialize(self, *args, **kwargs):
+        return await self._backing.initialize(*args, **kwargs)
 
-def decode(data):
-    o = json.loads(data)
-    encoding = o.get('encoding')
-    if encoding == 'bytes':
-        return base64.b64decode(o['data'])
-    elif encoding:
-        raise TypeError("Unsupported encoding: " + encoding)
-    else:
-        return o['data']
+    def encode(self, obj):
+        o = {}
+        if isinstance(obj, bytes):
+            o['encoding'] = 'bytes'
+            o['data'] = base64.b64encode(obj).decode()
+        else:
+            o['data'] = obj
+        return json.dumps(o)
 
+    def decode(self, data):
+        o = json.loads(data)
+        encoding = o.get('encoding')
+        if encoding == 'bytes':
+            return base64.b64decode(o['data'])
+        elif encoding:
+            raise TypeError("Unsupported encoding: " + encoding)
+        else:
+            return o['data']
 
-async def initialize(*args, **kwargs):
-    return _backing.initialize(*args, **kwargs)
+    async def get(self, ns, key, default=None):
+        try:
+            data = await self._backing.get(ns, str(key))
+        except ReferenceError:
+            return default
+        else:
+            return data and self.decode(data)
 
+    async def set(self, ns, key, value):
+        return await self._backing.set(ns, str(key), self.encode(value))
 
-async def get(ns, key, default=None):
-    try:
-        data = await _backing.get(ns, key)
-    except ReferenceError:
-        return default
-    else:
-        return data and decode(data)
+    async def has(self, ns, key):
+        return await self._backing.has(ns, str(key))
 
+    async def remove(self, ns, key):
+        return await self._backing.remove(ns, str(key))
 
-async def _set(ns, key, value):
-    return await _backing.set(ns, key, encode(value))
+    async def keys(self, ns, regex=None):
+        return await self._backing.keys(ns, regex=regex)
 
+    async def shutdown(self):
+        return await self._backing.shutdown()
 
-async def has(ns, key, value):
-    return await _backing.has(ns, key)
+    async def getState(self, key, default=None):
+        return await self.get(self.state_ns, key, default)
 
+    async def putState(self, key, value):
+        return await self.set(self.state_ns, key, value)
 
-async def remove(ns, key):
-    return await _backing.remove(ns, key)
+    async def removeState(self, key):
+        return await self.remove(self.state_ns, key)
 
+    async def getOurIdentity(self):
+        serialized = await self.getState('ourIdentityKey')
+        return IdentityKeyPair(serialized=serialized)
 
-async def keys(ns, re):
-    return await _backing.keys(ns, re)
+    async def saveOurIdentity(self, keypair):
+        assert isinstance(keypair, IdentityKeyPair)
+        await self.putState('ourIdentityKey', keypair.serialize())
 
+    async def removeOurIdentity(self):
+        await self.removeState('ourIdentityKey')
 
-async def shutdown():
-    return await _backing.shutdown()
+    async def getOurRegistrationId(self):
+        return await self.getState('registrationId')
 
+    async def loadPreKey(self, keyId):
+        if not await self.has(self.prekey_ns, keyId):
+            raise InvalidKeyIdException(keyId)
+        serialized = await self.get(self.prekey_ns, keyId)
+        return PreKeyRecord(serialized=serialized)
 
-async def get_state(key, default=None):
-    return await get(state_ns, key, default)
+    async def storePreKey(self, keyId, record):
+        assert isinstance(record, PreKeyRecord)
+        await self.set(self.prekey_ns, keyId, record.serialize())
 
+    async def removePreKey(self, keyId):
+        try:
+            await self.remove(self.prekey_ns, keyId)
+        finally:
+            # Avoid circular import..
+            from .. import hub
+            signal = await hub.SignalClient.factory()
+            await signal.refreshPreKeys()
 
-async def put_state(key, value):
-    return await _set(state_ns, key, value)
+    async def loadSignedPreKey(self, keyId):
+        serialized = await self.get(self.signed_prekey_ns, keyId)
+        if serialized is None:
+            raise InvalidKeyIdException(keyId)
+        return SignedPreKeyRecord(serialized=serialized)
 
+    async def storeSignedPreKey(self, keyId, record):
+        assert isinstance(record, SignedPreKeyRecord)
+        await self.set(self.signed_prekey_ns, keyId, record.serialize())
 
-async def remove_state(key):
-    return await _backing.remove(state_ns, key)
+    async def removeSignedPreKey(self, keyId):
+        await self.remove(self.signed_prekey_ns, keyId)
 
+    async def loadSession(self, addr, deviceId):
+        assert '.' not in addr
+        serialized = await self.get(self.session_ns, f'{addr}.{deviceId}')
+        if serialized:
+            return SessionRecord(serizlized=serialized)
+        else:
+            return SessionRecord()
 
-async def get_our_identity():
-    # XXX
-    return {
-        "pubkey": await get_state('our_identitykeyb'),
-        "privkey": await get_state('our_identitykey.priv')
-    }
+    async def storeSession(self, addr, deviceId, record):
+        assert '.' not in addr
+        await self.set(self.session_ns, f'{addr}.{deviceId}',
+                       record.serialize())
 
+    async def deleteSession(self, addr, deviceId):
+        assert '.' not in addr
+        await self.remove(self.session_ns, f'{addr}.{deviceId}')
 
-async def save_our_identity(keypair):
-    # XXX
-    import pdb;pdb.set_trace()
-    await put_state('our_identitykey.pub', keypair.publicKey)
-    await put_state('our_identitykey.priv', keypair.privateKey)
+    async def deleteAllSessions(self, addr):
+        assert '.' not in addr
+        for x in await self.keys(self.session_ns, re.compile(addr + r'\..*')):
+            await self.remove(self.session_ns, x)
 
+    async def clearSessionStore(self):
+        for x in await self.keys(self.session_ns):
+            await self.remove(self.session_ns, x)
 
-async def remove_our_identity():
-    # XXX
-    await remove_state('our_identitykey.pub')
-    await remove_state('our_identitykey.priv')
+    async def isTrustedIdentity(self, addr, remoteIdentityKey):
+        assert '.' not in addr
+        localIdentityKey = await self.loadIdentity(addr)
+        if not localIdentityKey:
+            logger.warn("WARNING: Implicit trust of peer: %s" % addr)
+            return True
+        return localIdentityKey == remoteIdentityKey
 
+    async def loadIdentity(self, addr):
+        assert '.' not in addr
+        serialized = await self.get(self.identitykey_ns, addr)
+        return IdentityKey(serialized=serialized)
 
-async def get_our_registration_id():
-    return await get_state('registrationId')
+    async def saveIdentity(self, addr, identKey):
+        """ Returns True if the key was updated. """
+        assert isinstance(identKey, IdentityKey)
+        assert '.' not in addr
+        existing = await self.get(self.identitykey_ns, addr)
+        raw = identKey.serialize()
+        await self.set(self.identitykey_ns, addr, raw)
+        return not not (existing and not existing != raw)
 
+    async def removeIdentity(self, addr):
+        assert '.' not in addr
+        await self.remove(self.identitykey_ns, addr)
+        await self.deleteAllSessions(addr)
 
-async def load_prekey(keyId):
-    # XXX
-    if await _backing.has(prekey_ns, keyId + '.pub'):
+    async def getDeviceIds(self, addr):
+        idents = await self.keys(self.session_ns, re.compile(addr + r'\..*'))
+        return [x.split('.')[1] for x in idents]
+
+    def getBackingClass(self, name):
         return {
-            "pubkey": await get(prekey_ns, keyId + '.pub'),
-            "privkey": await get(prekey_ns, keyId + '.priv')
-        }
+            #"redis": backing.RedisBacking,
+            #"postgres": backing.PostgresBacking,
+            "fs": backing.FSBacking
+        }[name]
 
 
-async def store_prekey(keyId, keypair):
-    # XXX
-    await _set(prekey_ns, keyId + '.priv', keypair.privkey)
-    await _set(prekey_ns, keyId + '.pub', keypair.pubkey)
+_store = None
+
+def getStore():
+    global _store
+    if _store is None:
+        _store = BackingStore()
+        asyncio.get_event_loop().run_until_complete(_store.initialize())
+    return _store
 
 
-async def remove_prekey(keyId):
-    try:
-        await _backing.remove(prekey_ns, keyId + '.pub')
-        await _backing.remove(prekey_ns, keyId + '.priv')
-    finally:
-        # Avoid circular import..
-        from .. import hub
-        signal = await hub.SignalClient.factory()
-        await signal.refresh_prekeys()
-
-
-async def load_signed_prekey(keyId):
-    # XXX
-    if not await _backing.has(signed_prekey_ns, keyId + '.pub'):
-        return
-    return {
-        "pubkey": await get(signed_prekey_ns, keyId + '.pub'),
-        "privkey": await get(signed_prekey_ns, keyId + '.priv')
-    }
-
-
-async def store_signed_prekey(keyId, keypair):
-    # XXX
-    await _set(signed_prekey_ns, keyId + '.priv', keypair.privkey)
-    await _set(signed_prekey_ns, keyId + '.pub', keypair.pubkey)
-
-
-async def remove_signed_prekey(keyId):
-    # XXX
-    await _backing.remove(signed_prekey_ns, keyId + '.pub')
-    await _backing.remove(signed_prekey_ns, keyId + '.priv')
-
-
-async def load_session(encoded_addr):
-    if not encoded_addr:
-        raise TypeError("Tried to get session for undefined/null addr")
-    data = await get(session_ns, encoded_addr)
-    if data:
-        return axolotl.SessionRecord.deserialize(data)
-
-
-async def store_session(encoded_addr, record):
-    if not encoded_addr:
-        raise TypeError("Tried to set session without addr")
-    await _set(session_ns, encoded_addr, record.serialize())
-
-
-async def remove_session(encoded_addr):
-    await _backing.remove(session_ns, encoded_addr)
-
-
-async def remove_all_sessions(addr):
-    if not addr:
-        raise TypeError("Tried to remove sessions without addr")
-    for x in await _backing.keys(session_ns, re.compile(addr + '\\..*')):
-        await _backing.remove(session_ns, x)
-
-
-async def clear_session_store():
-    for x in await _backing.keys(session_ns):
-        await _backing.remove(session_ns, x)
-
-
-async def is_trusted_identity(identifier, publickey):
-    if not identifier:
-        raise TypeError("Tried to get identity key without key")
-    identitykey = await load_identity(identifier)
-    if not identitykey:
-        logger.warn("WARNING: Implicit trust of peer:", identifier)
-        return True
-    import pdb;pdb.set_trace()
-    return identitykey == publickey  # XXX So wrong..
-
-
-async def load_identity(identifier):
-    if not identifier:
-        raise Exception("Tried to get identity key for undefined/null key")
-    addr = util.unencode_addr(identifier)[0]
-    data = await get(identitykey_ns, addr)
-    return IdentityKey(serialized=data)
-
-
-async def save_identity(identifier, identKey):
-    """ Returns True if the key was updated. """
-    if not identifier:
-        raise TypeError("Tried to set identity key without key")
-    if not isinstance(identKey, IdentityKey):
-        raise TypeError("Invalid type for save_identity")
-    addr = util.unencode_addr(identifier)[0]
-    existing = await get(identitykey_ns, addr)
-    raw = identKey.serialize()
-    await _set(identitykey_ns, addr, raw)
-    return not not (existing and not existing != raw)
-
-
-async def remove_identity(identifier):
-    addr = util.unencode_addr(identifier)[0]
-    await _backing.remove(identitykey_ns, addr)
-    await remove_all_sessions(addr)
-
-
-async def get_device_ids(addr):
-    if not addr:
-        raise TypeError("Tried to get device ids without addr")
-    idents = await _backing.keys(session_ns, re.compile(addr + '\\..*'))
-    return [x.split('.')[1] for x in idents]
-
-
-def get_backing_class(name):
-    return {
-        #"redis": backing.RedisBacking,
-        #"postgres": backing.PostgresBacking,
-        "fs": backing.FSBacking
-    }[name]
-
-
-def set_backing(Backing):
-    if not isinstance(Backing, type):
-        Backing = get_backing_class(Backing)
-    if not Backing:
-        raise TypeError("Invalid storage backing: " + Backing)
-    global _Backing, _backing
-    _Backing = Backing
-    _backing = Backing(_label)
-
-
-def set_label(label):
-    global _label, _backing
-    _label = label
-    _backing = _Backing(label)
-
-
-set = _set
-set_backing(default_backing)
+def setStore(store):
+    global _store
+    _store = store

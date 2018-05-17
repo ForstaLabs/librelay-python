@@ -9,66 +9,68 @@ from .atlas import AtlasClient
 from .signal import SignalClient
 from axolotl.util.keyhelper import KeyHelper
 
+store = storage.getStore()
 logger = logging.getLogger(__name__)
-default_name = 'librelay'
+defaultName = 'librelay'
 
 
 class ReturnInterface(object):
     pass
 
 
-def generate_password():
-    return secrets.token_urlsafe(16)
+def generatePassword():
+    return base64.b64encode(secrets.token_bytes(16)).decode().rstrip('=')
 
 
-def generate_signaling_key():
+def generateSignalingKey():
     return secrets.token_bytes(32 + 20)
 
 
-async def register_account(atlas_client=None, name=default_name):
-    if atlas_client is None:
-        atlas_client = await AtlasClient.factory()
-    registration_id = KeyHelper.generateRegistrationId()
-    password = generate_password()
-    signaling_key = generate_signaling_key()
-    r = await atlas_client.fetch('/v1/provision/account', method="PUT", json={
-        "signalingKey": base64.b64encode(signaling_key).decode(),
+async def registerAccount(atlasClient=None, name=defaultName):
+    if atlasClient is None:
+        atlasClient = await AtlasClient.factory()
+    # Workaround axolotl bug that generates unsigned ints.
+    registrationId = KeyHelper.generateRegistrationId() & 0x7fffffff
+    password = generatePassword()
+    signalingKey = generateSignalingKey()
+    r = await atlasClient.fetch('/v1/provision/account', method="PUT", json={
+        "signalingKey": base64.b64encode(signalingKey).decode(),
         "supportsSms": False,
         "fetchesMessages": True,
-        "registrationId": registration_id,
+        "registrationId": registrationId,
         "name": name,
         "password": password
     })
     addr = r['userId']
     username = f'{addr}.{r["deviceId"]}'
     identity = KeyHelper.generateIdentityKeyPair()
-    await storage.clear_session_store()
-    await storage.remove_our_identity()
-    await storage.remove_identity(addr)
-    await storage.save_identity(addr, identity.publicKey)
-    await storage.save_our_identity(identity)
-    await storage.put_state('addr', addr)
-    await storage.put_state('serverUrl', r['serverUrl'])
-    await storage.put_state('deviceId', r['deviceId'])
-    await storage.put_state('name', name)
-    await storage.put_state('username', username)
-    await storage.put_state('password', password)
-    await storage.put_state('registration_id', registration_id)
-    await storage.put_state('signalingKey', signaling_key)
+    await store.clearSessionStore()
+    await store.removeOurIdentity()
+    await store.removeIdentity(addr)
+    await store.saveIdentity(addr, identity.getPublicKey())
+    await store.saveOurIdentity(identity)
+    await store.putState('addr', addr)
+    await store.putState('serverUrl', r['serverUrl'])
+    await store.putState('deviceId', r['deviceId'])
+    await store.putState('name', name)
+    await store.putState('username', username)
+    await store.putState('password', password)
+    await store.putState('registrationId', registrationId)
+    await store.putState('signalingKey', signalingKey)
     sc = SignalClient(username, password, r['serverUrl'])
-    await sc.register_keys(await sc.generate_keys())
+    await sc.registerKeys(await sc.generateKeys())
 
 
-async def register_device(atlas_client=None, name=default_name,
-                          auto_provision=True, on_provision_ready=None):
-    if atlas_client is None:
-        atlas_client = await AtlasClient.factory()
-    account_info = await atlas_client.fetch('/v1/provision/account')
-    if not account_info.devices:
-        logger.error("Must use `register_account` for first device")
+async def registerDevice(atlasClient=None, name=defaultName,
+                         autoProvision=True, onProvisionReady=None):
+    if atlasClient is None:
+        atlasClient = await AtlasClient.factory()
+    accountInfo = await atlasClient.fetch('/v1/provision/account')
+    if not accountInfo.devices:
+        logger.error("Must use `registerAccount` for first device")
         raise TypeError("No Account")
-    signalClient = SignalClient(url=account_info.serverUrl)
-    if not on_provision_ready and auto_provision:
+    signalClient = SignalClient(url=accountInfo.serverUrl)
+    if not onProvisionReady and autoProvision:
         raise TypeError("Missing: onProvisionReady callback")
     returnInterface = ReturnInterface()
     returnInterface.waiting = True
@@ -83,7 +85,7 @@ async def register_device(atlas_client=None, name=default_name,
                     proto = protobufs.ProvisioningUuid.decode(request.body)
                     request.respond(200, 'OK')
                     if (autoProvision) {
-                        atlas_client.fetch('/v1/provision/request', {
+                        atlasClient.fetch('/v1/provision/request', {
                             method: 'POST',
                             json: {
                                 uuid: proto.uuid,
@@ -116,16 +118,17 @@ async def register_device(atlas_client=None, name=default_name,
         returnInterface.waiting = False
         addr = pmsg.addr
         identity = pmsg.identityKeyPair
-        if pmsg.addr != account_info.userId:
+        if pmsg.addr != accountInfo.userId:
             raise Exception('Security Violation: Foreign account sent us an identity key!')
-        registration_id = KeyHelper.generateRegistrationId()
-        password = generate_password()
-        signalingKey = generate_signaling_key()
+        # Workaround axolotl bug that generates unsigned ints.
+        registrationId = KeyHelper.generateRegistrationId() & 0x7fffffff
+        password = generatePassword()
+        signalingKey = generateSignalingKey()
         json = {
             "signalingKey": signalingKey.toString('base64'),
             "supportsSms": False,
             "fetchesMessages": True,
-            "registrationId": registration_id,
+            "registrationId": registrationId,
             "name": name
         }
         response = await signalClient.request(call='devices', httpType='PUT',
@@ -133,21 +136,21 @@ async def register_device(atlas_client=None, name=default_name,
                                               username=addr, password=password,
                                               json=json)
         username = f'{addr}.{response.deviceId}'
-        await storage.clear_session_store()
-        await storage.remove_our_identity()
-        await storage.remove_identity(addr)
-        await storage.save_identity(addr, identity.publicKey)
-        await storage.save_our_identity(identity)
-        await storage.put_state('addr', addr)
-        await storage.put_state('serverUrl', signalClient.url)
-        await storage.put_state('deviceId', response.deviceId)
-        await storage.put_state('name', name)
-        await storage.put_state('username', username)
-        await storage.put_state('password', password)
-        await storage.put_state('registration_id', registration_id)
-        await storage.put_state('signalingKey', signalingKey)
+        await store.clearSessionStore()
+        await store.removeOurIdentity()
+        await store.removeIdentity(addr)
+        await store.saveIdentity(addr, identity.publicKey)
+        await store.saveOurIdentity(identity)
+        await store.putState('addr', addr)
+        await store.putState('serverUrl', signalClient.url)
+        await store.putState('deviceId', response.deviceId)
+        await store.putState('name', name)
+        await store.putState('username', username)
+        await store.putState('password', password)
+        await store.putState('registrationId', registrationId)
+        await store.putState('signalingKey', signalingKey)
         authedClient = SignalClient(username, password, signalClient.url)
-        await authedClient.register_keys(await authedClient.generate_keys())
+        await authedClient.registerKeys(await authedClient.generateKeys())
     done = _done()
 
     async def cancel():

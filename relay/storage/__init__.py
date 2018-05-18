@@ -4,6 +4,7 @@ Modular axolotl storage interface.
 
 import asyncio
 import base64
+import inspect
 import json
 import logging
 import os
@@ -201,6 +202,44 @@ class BackingStore(AxolotlStore):
         }[name]
 
 
+class SyncStoreWrap(AxolotlStore):
+    """ A modular store that supports pluggable backends like filesystem,
+    databases. etc. """
+
+    def __init__(self, store):
+        self.__dict__ = store.__dict__
+        self._store = store
+        # Borg pattern for shared data with wrapped store.
+        for name, attribute in inspect.getmembers(store):
+            if name.startswith('__'):
+                continue
+            if asyncio.iscoroutinefunction(attribute):
+                setattr(self, name, self.syncify(attribute))
+            else:
+                setattr(self, name, attribute)
+
+    def syncify(self, awaitable):
+        def wrap(*args, **kwargs):
+            try:
+                loop = asyncio.get_event_loop()
+                print('reuse loop')
+            except RuntimeError:
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                print('NEW loop')
+            import threading
+            print('who', threading.currentThread(), loop, awaitable, self)
+            # We can't use run_until_complete because it's not safe to use 
+            try:
+                a = loop.run_until_complete(awaitable(*args, **kwargs))
+            finally:
+                loop.stop()
+                asyncio.set_event_loop(None)
+            print("YES", a)
+            return a
+        return wrap
+
+
 _store = None
 
 def getStore():
@@ -209,6 +248,11 @@ def getStore():
         _store = BackingStore()
         asyncio.get_event_loop().run_until_complete(_store.initialize())
     return _store
+
+
+def getSyncStore():
+    """ Return a syncronous wrapper of the store interface. """
+    return SyncStoreWrap(getStore())
 
 
 def setStore(store):

@@ -8,6 +8,9 @@ from . import hub
 from . import protobufs
 from . import storage
 from .websocket_resource import WebSocketResource
+from axolotl.protocol.prekeywhispermessage import PreKeyWhisperMessage
+from axolotl.protocol.whispermessage import WhisperMessage
+from axolotl.sessioncipher import SessionCipher
 
 
 store = storage.getStore()
@@ -24,6 +27,7 @@ class MessageReceiver(eventing.EventTarget):
         self.addr = addr
         self.device_id = device_id
         self.signaling_key = signaling_key
+        self.syncStore = storage.getSyncStore()
         if not no_web_socket:
             url = self.signal.getMessageWebSocketUrl()
             self.wsr = WebSocketResource(url, handleRequest=self.handleRequest)
@@ -152,7 +156,7 @@ class MessageReceiver(eventing.EventTarget):
         else:
             raise Exception('Received message with no content and no legacyMessage')
         try:
-            await handler.call(self, envelope)
+            await handler(envelope)
         #except errors.MessageCounterError:  #  XXX Where who do dem?
         #    logger.warning("Ignoring MessageCounterError for:", envelope)
         #    return
@@ -185,26 +189,37 @@ class MessageReceiver(eventing.EventTarget):
                 raise ValueError('Invalid padding')
         return buf # empty
 
-    async def decrypt(self, envelope, ciphertext):
-        addr = libsignal.SignalProtocolAddress(envelope.source,
-                                                         envelope.sourceDevice)
-        sessionCipher = libsignal.SessionCipher(store, addr)
-        if envelope.type == envelope.CIPHERTEXT:
-            return self.unpad(await sessionCipher.decryptWhisperMessage(ciphertext))
-        elif envelope.type == envelope.PREKEY_BUNDLE:
-            return await self.decryptPreKeyWhisperMessage(ciphertext, sessionCipher, addr)
-        raise Exception("Unknown message type")
+    async def asyncify(self, callback, *args, **kwargs):
+        """ This is a bit odd, but we need to asyncify some calls to axolotl
+        because our store interface is actually async and we can't make calls
+        to loop.run_until_complete inside a running event loop.  So we run
+        these affected functions inside a thread executor that can have it's
+        own event loop too.  Crazy but works. """
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, callback, *args, **kwargs)
 
-    async def decryptPreKeyWhisperMessage(self, ciphertext, sessionCipher, address):
-        try:
-            return self.unpad(await sessionCipher.decryptPreKeyWhisperMessage(ciphertext))
-        except Exception as e:
-            # XXX port
-            import pdb;pdb.set_trace()
-            if e.message == 'Unknown identity key':
-                raise errors.IncomingIdentityKeyError(address, ciphertext,
-                                                      e.identitykey)
-            raise e
+    async def decrypt(self, envelope, ciphertext):
+        stores = [self.syncStore] * 4
+        sessionCipher = SessionCipher(*stores, envelope.source, envelope.sourceDevice)
+        if envelope.type == envelope.CIPHERTEXT:
+            #return self.unpad(await sessionCipher.decryptMsg(ciphertext))
+            msg = WhisperMessage(serialized=ciphertext)
+            return await self.asyncify(sessionCipher.decryptMsg, msg)
+        elif envelope.type == envelope.PREKEY_BUNDLE:
+            try:
+                #return self.unpad(await sessionCipher.decryptPkmsg(ciphertext))
+                msg = PreKeyWhisperMessage(serialized=ciphertext)
+                return await self.asyncify(sessionCipher.decryptPkmsg, msg)
+            except Exception as exc:
+                # XXX port
+                print(2222, exc)
+                print(2222, exc)
+                import pdb;pdb.set_trace()
+                if exc.message == 'Unknown identity key':
+                    raise errors.IncomingIdentityKeyError(address, ciphertext,
+                                                          e.identitykey)
+                raise e
+        raise Exception("Unknown message type")
 
     async def handleSentMessage(self, sent, envelope):
         if sent.message.flags & sent.message.END_SESSION:

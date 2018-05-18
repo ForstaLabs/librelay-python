@@ -22,14 +22,14 @@ async def queue_async(bucket, awaitable):
     here have completed (or thrown).  The bucket argument is a hashable
     key representing the task queue to use. """
     if bucket not in _buckets:
-        bucket = _buckets[bucket] = collections.deque()
+        queue = _buckets[bucket] = collections.deque()
         inactive = True
     else:
-        bucket = _buckets[bucket]
+        queue = _buckets[bucket]
         inactive = False
     scheduled = asyncio.Future()
     scheduled.awaitable = awaitable
-    bucket.append(scheduled)
+    queue.append(scheduled)
     if inactive:
         asyncio.get_event_loop().create_task(_executor(bucket))
     return await scheduled

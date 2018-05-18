@@ -19,6 +19,7 @@ DEFAULT_ATLAS_URL = 'https://atlas.forsta.io'
 cred_store_key = 'atlasCredential'
 url_store_key = 'atlasUrl'
 
+
 def jwt_b64decode(value):
     padding = 4 - (len(value) % 4)
     return base64.urlsafe_b64decode(value + ("=" * padding))
@@ -43,12 +44,12 @@ class AtlasClient(object):
     def __init__(self, url=None, jwt=None):
         self.url = url or DEFAULT_ATLAS_URL
         if jwt:
-            jwt_dict = decode_jwt(jwt)
-            self.user_id = jwt_dict['payload']['user_id']
-            self.org_id = jwt_dict['payload']['org_id']
-            self.auth_header = 'JWT ' + jwt
+            jwtDict = decode_jwt(jwt)
+            self.userId = jwtDict['payload']['user_id']
+            self.orgId = jwtDict['payload']['org_id']
+            self.authHeader = 'JWT ' + jwt
         else:
-            self.auth_header = None
+            self.authHeader = None
         self._httpClient = aiohttp.ClientSession(read_timeout=30)
 
     def __del__(self):
@@ -62,16 +63,16 @@ class AtlasClient(object):
         return cls(url=url, jwt=jwt)
 
     @classmethod
-    async def request_authentication_code(cls, user_tag, **options):
+    async def requestAuthenticationCode(cls, userTag, **options):
         client = cls(**options)
-        user, org = client.parse_tag(user_tag)
+        user, org = client.parseTag(userTag)
         await client.fetch(f'/v1/login/send/{org}/{user}/')
-        return lambda code: cls.authenticate_via_code(user_tag, code, **options)
+        return lambda code: cls.authenticateViaCode(userTag, code, **options)
 
     @classmethod
-    async def authenticate_via_code(cls, user_tag, code, **options):
+    async def authenticateViaCode(cls, userTag, code, **options):
         client = cls(**options)
-        user, org = client.parse_tag(user_tag)
+        user, org = client.parseTag(userTag)
         auth = await client.fetch('/v1/login/authtoken/', method='POST',
                                   json={"authtoken": f'{org}:{user}:{code}'})
         store.putState(cred_store_key, auth['token'])
@@ -87,74 +88,74 @@ class AtlasClient(object):
         store.putState(url_store_key, client.url)
         return cls(url=client.url, jwt=auth['token'])
 
-    def parse_tag(self, tag):
+    def parseTag(self, tag):
         user, *org = tag.lstrip('@').split(':', 1)
         if not org:
             org = ['forsta']
         return user, org[0]
 
     async def fetch(self, urn, method='GET', json=None):
-        headers = self.auth_header and {'Authorization': self.auth_header}
+        headers = self.authHeader and {'Authorization': self.authHeader}
         url = f'{self.url}/{urn.lstrip("/")}'
-        logger.debug(f"Fetch Request: {urn} {method} {json}")
+        logger.debug(f"Atlas Request: {urn} {method} {json}")
         async with self._httpClient.request(url=url, method=method, json=json,
                                             headers=headers) as resp:
             is_json = resp.content_type.startswith('application/json')
             result = await resp.json() if is_json else await resp.text()
-            logger.debug(f"Fetch Response: {urn} {method}: [{resp.status}] {result}")
+            logger.debug(f"Atlas Response: {urn} {method}: [{resp.status}] {result}")
             resp.raise_for_status()
             return result
 
-    async def maintain_jwt(self, force_refresh=False, authenticator=None,
-                           on_refresh=None):
+    async def maintainJWT(self, forceRefresh=False, authenticator=None,
+                          onRefresh=None):
         """ Manage auth token expiration.  This routine will reschedule itself
         as needed. """
         token = decode_jwt(store.getState(cred_store_key))
         refresh_delay = lambda t: (t['payload']['exp'] - time.time()) / 2
-        if force_refresh or refresh_delay(token) < 1:
+        if forceRefresh or refresh_delay(token) < 1:
             encoded_token = store.getState(cred_store_key)
             resp = await self.fetch('/v1/api-token-refresh/', method="POST",
                                     json={"token": encoded_token})
             if not resp or not resp['token']:
                 if authenticator:
                     result = await authenticator()
-                    logger.info("Reauthenticated user in maintain_jwt")
+                    logger.info("Reauthenticated user in maintainJWT")
                     jwt = result.jwt
                 else:
-                    raise TypeError("Unable to reauthenticate in maintain_jwt")
+                    raise TypeError("Unable to reauthenticate in maintainJWT")
             else:
                 jwt = resp['token']
             token = decode_jwt(jwt)
-            logger.info("Refreshed JWT in maintain_jwt")
+            logger.info("Refreshed JWT in maintainJWT")
             store.putState(cred_store_key, jwt)
-            self.auth_header = 'JWT ' + jwt
-            self.user_id = token['payload']['user_id']
-            if on_refresh:
+            self.authHeader = 'JWT ' + jwt
+            self.userId = token['payload']['user_id']
+            if onRefresh:
                 try:
-                    await on_refresh(token)
+                    await onRefresh(token)
                 except Exception as e:
                     logger.exception('on_refresh callback error')
         next_update = refresh_delay(token)
-        logger.info('maintain_jwt will recheck auth token in %f seconds' %
+        logger.info('maintainJWT will recheck auth token in %f seconds' %
                     next_update)
         await asyncio.sleep(next_update)
-        await self.maintain_jwt(False, authenticator, on_refresh)
+        await self.maintainJWT(False, authenticator, onRefresh)
 
-    async def resolve_tags(self, expression):
-        return (await self.resolve_tags_batch([expression]))[0]
+    async def resolveTags(self, expression):
+        return (await self.resolveTagsBatch([expression]))[0]
 
-    async def resolve_tags_batch(self, expressions):
+    async def resolveTagsBatch(self, expressions):
         if not expressions:
             return []
         resp = await self.fetch('/v1/tagmath/', method='POST',
-                                json={"expression": expressions})
+                                json={"expressions": expressions})
         # Enhance the warnings a bit.
-        for res, expr in zip(resp.results, expressions):
-            for w in res.warnings:
-                w.context = expr[w.position, w.position + w.length]
-        return resp.results
+        for res, expr in zip(resp['results'], expressions):
+            for w in res['warnings']:
+                w['context'] = expr[w['position']:w['position']+w['length']]
+        return resp['results']
 
-    def sanitize_tags(self, expression):
+    def sanitizeTags(self, expression):
         """ Clean up tags a bit. Add @ where needed.
         NOTE: This does not currently support universal format! """
         sep_re = re.compile(r'([\s()^&+-]+)')
@@ -165,11 +166,11 @@ class AtlasClient(object):
             tags.append(tag)
         return ' '.join(tags)
 
-    async def get_users(self, user_ids, only_dir=False):
-        missing = set(user_ids)
+    async def getUsers(self, userIds, onlyDir=False):
+        missing = set(userIds)
         users = []
-        if not only_dir:
-            resp = await self.fetch('/v1/user/?id_in=' + ','.join(user_ids))
+        if not onlyDir:
+            resp = await self.fetch('/v1/user/?id_in=' + ','.join(userIds))
             for user in resp['results']:
                 users.append(user)
                 missing.remove(user.id)
@@ -180,10 +181,11 @@ class AtlasClient(object):
                 users.append(user)
         return users
 
-    async def get_devices(self):
+    async def getDevices(self):
         try:
             return (await self.fetch('/v1/provision/account'))['devices']
         except util.RequestError as e:
+            # XXX
             if e.code == 404:
                 return []
             else:

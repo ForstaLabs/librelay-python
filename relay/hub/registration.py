@@ -28,7 +28,7 @@ def generateSignalingKey():
 
 async def registerAccount(atlasClient=None, name=defaultName):
     if atlasClient is None:
-        atlasClient = await AtlasClient.factory()
+        atlasClient = AtlasClient.factory()
     # Workaround axolotl bug that generates unsigned ints.
     registrationId = KeyHelper.generateRegistrationId() & 0x7fffffff
     password = generatePassword()
@@ -44,19 +44,19 @@ async def registerAccount(atlasClient=None, name=defaultName):
     addr = r['userId']
     username = f'{addr}.{r["deviceId"]}'
     identity = KeyHelper.generateIdentityKeyPair()
-    await store.clearSessionStore()
-    await store.removeOurIdentity()
-    await store.removeIdentity(addr)
-    await store.saveIdentity(addr, identity.getPublicKey())
-    await store.saveOurIdentity(identity)
-    await store.putState('addr', addr)
-    await store.putState('serverUrl', r['serverUrl'])
-    await store.putState('deviceId', r['deviceId'])
-    await store.putState('name', name)
-    await store.putState('username', username)
-    await store.putState('password', password)
-    await store.putState('registrationId', registrationId)
-    await store.putState('signalingKey', signalingKey)
+    store.clearSessionStore()
+    store.removeOurIdentity()
+    store.removeIdentity(addr)
+    store.saveIdentity(addr, identity.getPublicKey())
+    store.saveOurIdentity(identity)
+    store.putState('addr', addr)
+    store.putState('serverUrl', r['serverUrl'])
+    store.putState('deviceId', r['deviceId'])
+    store.putState('name', name)
+    store.putState('username', username)
+    store.putState('password', password)
+    store.putState('registrationId', registrationId)
+    store.putState('signalingKey', signalingKey)
     sc = SignalClient(username, password, r['serverUrl'])
     await sc.registerKeys(await sc.generateKeys())
 
@@ -64,7 +64,7 @@ async def registerAccount(atlasClient=None, name=defaultName):
 async def registerDevice(atlasClient=None, name=defaultName,
                          autoProvision=True, onProvisionReady=None):
     if atlasClient is None:
-        atlasClient = await AtlasClient.factory()
+        atlasClient = AtlasClient.factory()
     accountInfo = await atlasClient.fetch('/v1/provision/account')
     if not accountInfo.devices:
         logger.error("Must use `registerAccount` for first device")
@@ -136,19 +136,19 @@ async def registerDevice(atlasClient=None, name=defaultName,
                                               username=addr, password=password,
                                               json=json)
         username = f'{addr}.{response.deviceId}'
-        await store.clearSessionStore()
-        await store.removeOurIdentity()
-        await store.removeIdentity(addr)
-        await store.saveIdentity(addr, identity.publicKey)
-        await store.saveOurIdentity(identity)
-        await store.putState('addr', addr)
-        await store.putState('serverUrl', signalClient.url)
-        await store.putState('deviceId', response.deviceId)
-        await store.putState('name', name)
-        await store.putState('username', username)
-        await store.putState('password', password)
-        await store.putState('registrationId', registrationId)
-        await store.putState('signalingKey', signalingKey)
+        store.clearSessionStore()
+        store.removeOurIdentity()
+        store.removeIdentity(addr)
+        store.saveIdentity(addr, identity.publicKey)
+        store.saveOurIdentity(identity)
+        store.putState('addr', addr)
+        store.putState('serverUrl', signalClient.url)
+        store.putState('deviceId', response.deviceId)
+        store.putState('name', name)
+        store.putState('username', username)
+        store.putState('password', password)
+        store.putState('registrationId', registrationId)
+        store.putState('signalingKey', signalingKey)
         authedClient = SignalClient(username, password, signalClient.url)
         await authedClient.registerKeys(await authedClient.generateKeys())
     done = _done()

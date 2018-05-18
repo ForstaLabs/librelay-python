@@ -2,8 +2,7 @@ import aiohttp
 import asyncio
 import logging
 import re
-from .. import protobufs
-from .. import storage
+from .. import protobufs, storage, errors
 from ..provisioning_cipher import ProvisioningCipher
 from axolotl.util.keyhelper import KeyHelper
 from base64 import b64decode, b64encode
@@ -62,9 +61,8 @@ class SignalClient(object):
         provisioningCipher = ProvisioningCipher()
         pEnvelope = await provisioningCipher.encrypt(pubkey, pMessage)
         try:
-            async with await self.fetch('/v1/provisioning/' + uuid, method='PUT',
-                                        json={"body": b64encode(pEnvelope)}):
-                pass
+            await self.fetch('/v1/provisioning/' + uuid, method='PUT',
+                             json={"body": b64encode(pEnvelope)})
         except aiohttp.ClientResponseError as e:
             # 404 is okay, just means someone else handled it already.
             if e.status != 404:
@@ -113,29 +111,31 @@ class SignalClient(object):
         headers = {}
         if username and password:
             headers['Authorization'] = self.authHeader(username, password)
-        async with self.fetch(path, method=method, json=json,
-                              headers=headers) as r:
-            is_json = r.content_type.startswith('application/json')
-            resp_content = await r.json() if is_json else await r.text()
-        # Can we just use native exceptions from aiohttp?? please
-        #if not resp.ok:
-        #    e = errors.ProtocolError(resp.status, resp_content)
-        #    if e.code in SIGNAL_HTTP_MESSAGES:
-        #        e.message = SIGNAL_HTTP_MESSAGES[e.code]
-        #    else:
-        #        e.message = f'Status code: {e.code}'
-        #    raise e
-        return resp_content
+        return await self.fetch(path, method=method, json=json, headers=headers)
 
-    def fetch(self, urn, headers=None, **kwargs):
+    async def fetch(self, urn, method='GET', headers=None, json=None):
         """ Thin wrapper to augment json and auth support. """
         if headers is None:
             headers = {}
         if 'Authorization' not in headers and self.username and self.password:
             headers['Authorization'] = self.authHeader(self.username,
                                                        self.password)
-        return self._httpClient.request(url=f'{self.url}/{urn.lstrip("/")}',
-                                        headers=headers, **kwargs)
+        logger.debug(f"Signal Request: {urn} {method} {json}")
+        req = self._httpClient.request(url=f'{self.url}/{urn.lstrip("/")}',
+                                       headers=headers, method=method,
+                                       json=json)
+        async with req as resp:
+            is_json = resp.content_type.startswith('application/json')
+            result = await resp.json() if is_json else await resp.text()
+            logger.debug(f"Signal Response: {urn} {method}: [{resp.status}] {result}")
+            if not resp.ok:
+                e = errors.ProtocolError(resp.status, result)
+                if e.code in SIGNAL_HTTP_MESSAGES:
+                    e.message = SIGNAL_HTTP_MESSAGES[e.code]
+                else:
+                    e.message = f'Status code: {e.code}'
+                raise e
+            return result
 
     async def getDevices(self):
         data = await self.request(call='devices')

@@ -18,8 +18,8 @@ store = storage.getStore()
 logger = logging.getLogger(__name__)
 
 
-def jsNow():
-    """ Epoch in ms like javascript. """
+def msnow():
+    """ Epoch in ms like java*. """
     return round(datetime.datetime.now().timestamp() * 1000)
 
 
@@ -36,13 +36,13 @@ class Message(object):
         content = protobufs.Content()
         #dataMessage = protobufs.DataMessage()
         dataMessage = content.dataMessage
-        if self.body:
+        if getattr(self, 'body', None):
             dataMessage.body = json.dumps(self.body)
-        if self.attachmentPointers:
+        if getattr(self, 'attachmentPointers', None):
             dataMessage.attachments = self.attachmentPointers
-        if self.flags:
+        if getattr(self, 'flags', None):
             dataMessage.flags = self.flags
-        if self.expiration:
+        if getattr(self, 'expiration', None):
             dataMessage.expireTimer = self.expiration
         #content = protobufs.Content()
         #content.dataMessage = dataMessage
@@ -52,13 +52,14 @@ class Message(object):
 class MessageSender(eventing.EventTarget):
 
     def __init__(self, addr, signal, atlas):
+        assert addr and signal and  atlas
         self.addr = addr
         self.signal = signal
         self.atlas = atlas
 
     @classmethod
     def factory(cls):
-        addr = storage.getState('addr')
+        addr = store.getState('addr')
         signal = hub.SignalClient.factory()
         atlas = hub.AtlasClient.factory()
         return cls(addr, signal, atlas)
@@ -75,13 +76,9 @@ class MessageSender(eventing.EventTarget):
         return ptr
 
     async def uploadAttachments(self, message):
-        attachments = message.attachments;
-        import pdb;pdb.set_trace()   # I don't think we need to do this patch job with python
-        if not attachments:
-            message.attachmentPointers = []
-            return
-        uploads = map(attachments, self.makeAttachmentPointer)
-        message.attachmentPointers = await asyncio.gather(uploads)
+        if message.attachments:
+            uploads = map(message.attachments, self.makeAttachmentPointer)
+            message.attachmentPointers = await asyncio.gather(uploads)
 
     async def send(self,
         to=None, distribution=None,
@@ -101,9 +98,9 @@ class MessageSender(eventing.EventTarget):
         if data is None:
             data = {}
         if threadId is None:
-            threadId = uuid.uuid4()
+            threadId = str(uuid.uuid4())
         if messageId is None:
-            messageId = uuid.uuid4()
+            messageId = str(uuid.uuid4())
         if distribution is None:
             if to is None:
                 raise TypeError("`to` or `distribution` required")
@@ -124,7 +121,7 @@ class MessageSender(eventing.EventTarget):
             data['body'] = body
         if attachments:
             data['attachments'] = [x.getMeta() for x in attachments]
-        timestamp = jsNow()
+        timestamp = msnow()
         msg = Message(
             addrs=distribution['userids'],
             threadId=threadId,
@@ -157,6 +154,7 @@ class MessageSender(eventing.EventTarget):
                                 self.scrubSelf(distribution['userids']))
 
     async def _send(self, msgProto, timestamp, addrs):
+        assert all(addrs), addrs
         outmsg = OutgoingMessage(self.signal, timestamp, msgProto)
         outmsg.on('keychange', self.onKeyChange)
 
@@ -165,9 +163,9 @@ class MessageSender(eventing.EventTarget):
                 await outmsg.sendToAddr(addr)
             except Exception as e:
                 logger.exception("Message send error to: %s" % (addr,))
-                self.onError(e)
-        await asyncio.gather([queue_async(f'msg_send-{x}', lambda: sendWrap(x))
-                              for x in addrs])
+                await self.onError(e)
+        await asyncio.gather(*[queue_async(f'msg_send-{x}', lambda: sendWrap(x))
+                               for x in addrs])
         return outmsg
 
     async def onError(self, e):
@@ -180,18 +178,15 @@ class MessageSender(eventing.EventTarget):
 
     async def _sendSync(self, content, timestamp, threadId,
                         expirationStartTimestamp):
-        sentMessage = protobufs.SyncMessage.Sent()
-        sentMessage.timestamp = timestamp
-        sentMessage.message = content.dataMessage
+        content = protobufs.Content()
+        sent = content.syncMessage.sent
+        sent.timestamp = timestamp
+        sent.message.CopyFrom(content.dataMessage)
         if threadId:
-            sentMessage.destination = threadId
+            sent.destination = threadId
         if expirationStartTimestamp:
-            sentMessage.expirationStartTimestamp = expirationStartTimestamp
-        syncMessage = protobufs.SyncMessage()
-        syncMessage.sent = sentMessage
-        syncContent = protobufs.Content()
-        syncContent.syncMessage = syncMessage
-        return await self._send(syncContent, timestamp, [self.addr])
+            sent.expirationStartTimestamp = expirationStartTimestamp
+        return await self._send(content, timestamp, [self.addr])
 
     async def syncReadMessages(self, reads):
         if not reads:
@@ -206,14 +201,14 @@ class MessageSender(eventing.EventTarget):
         syncMessage.read = readProtobufs
         content = protobufs.Content()
         content.syncMessage = syncMessage
-        return await self._send(content, jsNow(), [self.addr])
+        return await self._send(content, msnow(), [self.addr])
 
     def scrubSelf(self, addrs):
         return [x for x in addrs if x != self.addr]
 
     async def closeSession(self, addr, timestamp=None):
         if timestamp is None:
-            timestamp = jsNow()
+            timestamp = msnow()
         dataMessage = protobufs.DataMessage()
         dataMessage.flags = protobufs.DataMessage.END_SESSION
         content = protobufs.Content()
@@ -221,15 +216,12 @@ class MessageSender(eventing.EventTarget):
         outmsg = await self._send(content, timestamp, [addr])
         deviceIds = store.getDeviceIds(addr)
         raise NotImplementedError('xxx')
-        print('XXX is async?', deviceIds)
-        print('XXX is async?', deviceIds)
-        print('XXX is async?', deviceIds)
         #await Promise(resolve => {
         #    outmsg.on('sent', resolve)
         #    outmsg.on('error', resolve)
         #})
         #await Promise.all(deviceIds.map(deviceId => {
         #    address = libsignal.SignalProtocolAddress(addr, deviceId)
-        #    sessionCipher = libsignal.SessionCipher(storage, address)
+        #    sessionCipher = libsignal.SessionCipher(store, address)
         #    return sessionCipher.closeOpenSessionForDevice()
         #}))

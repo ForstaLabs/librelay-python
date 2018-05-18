@@ -8,6 +8,7 @@ from . import hub
 from . import protobufs
 from . import storage
 from .websocket_resource import WebSocketResource
+from axolotl.duplicatemessagexception import DuplicateMessageException
 from axolotl.protocol.prekeywhispermessage import PreKeyWhisperMessage
 from axolotl.protocol.whispermessage import WhisperMessage
 from axolotl.sessioncipher import SessionCipher
@@ -156,9 +157,9 @@ class MessageReceiver(eventing.EventTarget):
             raise Exception('Received message with no content and no legacyMessage')
         try:
             await handler(envelope)
-        #except errors.MessageCounterError:  #  XXX Where who do dem?
-        #    logger.warning("Ignoring MessageCounterError for:", envelope)
-        #    return
+        except DuplicateMessageException:
+            logger.warning("Ignoring duplicate message for: %s" % (envelope,))
+            return
         except errors.IncomingIdentityKeyError as e:
             if reentrant:
                 raise
@@ -167,7 +168,7 @@ class MessageReceiver(eventing.EventTarget):
                 envelope.keyChange = True
                 return await self.handleEnvelope(envelope, reentrant=True)
         except errors.RelayError as e:
-            logger.warning("Supressing RelayError:", e)
+            logger.warning("Supressing RelayError: %s" % (e,))
         except Exception as e:
             ev = eventing.Event('error')
             ev.error = e
@@ -188,32 +189,21 @@ class MessageReceiver(eventing.EventTarget):
                 raise ValueError('Invalid padding')
         return buf # empty
 
-    async def asyncify(self, callback, *args, **kwargs):
-        """ This is a bit odd, but we need to asyncify some calls to axolotl
-        because our store interface is actually async and we can't make calls
-        to loop.run_until_complete inside a running event loop.  So we run
-        these affected functions inside a thread executor that can have it's
-        own event loop too.  Crazy but works. """
-        loop = asyncio.get_event_loop()
-        return await loop.run_in_executor(None, callback, *args, **kwargs)
-
-    async def decrypt(self, envelope, ciphertext):
+    def decrypt(self, envelope, ciphertext):
         stores = [store] * 4
         sessionCipher = SessionCipher(*stores, envelope.source, envelope.sourceDevice)
         if envelope.type == envelope.CIPHERTEXT:
-            #return self.unpad(await sessionCipher.decryptMsg(ciphertext))
             msg = WhisperMessage(serialized=ciphertext)
-            return await self.asyncify(sessionCipher.decryptMsg, msg)
+            return self.unpad(self.sessionCipher.decryptMsg(msg))
         elif envelope.type == envelope.PREKEY_BUNDLE:
             try:
-                #return self.unpad(await sessionCipher.decryptPkmsg(ciphertext))
                 msg = PreKeyWhisperMessage(serialized=ciphertext)
-                return await self.asyncify(sessionCipher.decryptPkmsg, msg)
+                return self.unpad(sessionCipher.decryptPkmsg(msg))
             except Exception as exc:
+                logger.exception("DERP")
                 # XXX port
                 print(2222, exc)
                 print(2222, exc)
-                import pdb;pdb.set_trace()
                 if exc.message == 'Unknown identity key':
                     raise errors.IncomingIdentityKeyError(address, ciphertext,
                                                           e.identitykey)
@@ -246,23 +236,23 @@ class MessageReceiver(eventing.EventTarget):
             "source": envelope.source,
             "sourceDevice": envelope.sourceDevice,
             "message": message,
-            "keyChange": envelope.keyChange
+            "keyChange": getattr(envelope, 'keyChange', None)
         }
         await self.dispatchEvent(ev)
 
     async def handleLegacyMessage(self, envelope):
-        data = await self.decrypt(envelope, envelope.legacyMessage)
+        data = self.decrypt(envelope, envelope.legacyMessage)
         message = protobufs.DataMessage()
         message.ParseFromString(data)
         await self.handleDataMessage(message, envelope)
 
     async def handleContentMessage(self, envelope):
-        data = await self.decrypt(envelope, envelope.content)
+        data = self.decrypt(envelope, envelope.content)
         content = protobufs.Content()
         content.ParseFromString(data)
-        if content.syncMessage:
+        if content.HasField('syncMessage'):
             await self.handleSyncMessage(content.syncMessage, envelope, content)
-        elif content.dataMessage:
+        elif content.HasField('dataMessage'):
             await self.handleDataMessage(content.dataMessage, envelope, content)
         else:
             raise TypeError('Got content message with no dataMessage or syncMessage')
@@ -277,18 +267,14 @@ class MessageReceiver(eventing.EventTarget):
         elif message.read:
             await self.handleRead(message.read, envelope)
         elif message.contacts:
-            logger.error("Deprecated contact sync message:", message, envelope, content)
             raise TypeError('Deprecated contact sync message')
         elif message.groups:
-            logger.error("Deprecated group sync message:", message, envelope, content)
             raise TypeError('Deprecated group sync message')
         elif message.blocked:
             self.handleBlocked(message.blocked, envelope)
         elif message.request:
-            logger.error("Deprecated group request sync message:", message, envelope, content)
             raise TypeError('Deprecated group request sync message')
         else:
-            logger.error("Empty sync message:", message, envelope, content)
             raise TypeError('Empty SyncMessage')
 
     async def handleRead(self, read, envelope):
@@ -324,16 +310,8 @@ class MessageReceiver(eventing.EventTarget):
         """ Now that its decrypted, validate the message and clean it up for
         consumer processing.  Note that messages may (generally) only perform
         one action and we ignore remaining fields after the first action. """
-        import pdb;pdb.set_trace() # validate what probotufs on python look like.
-        if msg.flags is None:
-            msg.flags = 0
-        if msg.expireTimer is None:
-            msg.expireTimer = 0
         if msg.flags & msg.END_SESSION:
             return msg
-        if msg.group:
-            # We should blow up here very soon. XXX
-            logger.error("Legacy group message detected", msg)
         if msg.attachments:
             await asyncio.gather(map(self.handleAttachment, msg.attachments))
         return msg

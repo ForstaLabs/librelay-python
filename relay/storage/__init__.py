@@ -4,7 +4,6 @@ Modular axolotl storage interface.
 
 import asyncio
 import base64
-import inspect
 import json
 import logging
 import os
@@ -19,6 +18,7 @@ from axolotl.state.sessionrecord import SessionRecord
 from axolotl.state.signedprekeyrecord import SignedPreKeyRecord
 
 logger = logging.getLogger(__name__)
+_store = None
 
 
 class BackingStore(AxolotlStore):
@@ -37,8 +37,8 @@ class BackingStore(AxolotlStore):
             backing = self.getBackingClass(b)(label)
         self._backing = backing
 
-    async def initialize(self, *args, **kwargs):
-        return await self._backing.initialize(*args, **kwargs)
+    def initialize(self, *args, **kwargs):
+        return self._backing.initialize(*args, **kwargs)
 
     def encode(self, obj):
         o = {}
@@ -59,139 +59,146 @@ class BackingStore(AxolotlStore):
         else:
             return o['data']
 
-    async def get(self, ns, key, default=None):
+    def get(self, ns, key, default=None):
         try:
-            data = await self._backing.get(ns, str(key))
+            data = self._backing.get(ns, str(key))
         except ReferenceError:
             return default
         else:
             return data and self.decode(data)
 
-    async def set(self, ns, key, value):
-        return await self._backing.set(ns, str(key), self.encode(value))
+    def set(self, ns, key, value):
+        return self._backing.set(ns, str(key), self.encode(value))
 
-    async def has(self, ns, key):
-        return await self._backing.has(ns, str(key))
+    def has(self, ns, key):
+        return self._backing.has(ns, str(key))
 
-    async def remove(self, ns, key):
-        return await self._backing.remove(ns, str(key))
+    def remove(self, ns, key):
+        return self._backing.remove(ns, str(key))
 
-    async def keys(self, ns, regex=None):
-        return await self._backing.keys(ns, regex=regex)
+    def keys(self, ns, regex=None):
+        return self._backing.keys(ns, regex=regex)
 
-    async def shutdown(self):
-        return await self._backing.shutdown()
+    def shutdown(self):
+        return self._backing.shutdown()
 
-    async def getState(self, key, default=None):
-        return await self.get(self.state_ns, key, default)
+    def getState(self, key, default=None):
+        return self.get(self.state_ns, key, default)
 
-    async def putState(self, key, value):
-        return await self.set(self.state_ns, key, value)
+    def putState(self, key, value):
+        return self.set(self.state_ns, key, value)
 
-    async def removeState(self, key):
-        return await self.remove(self.state_ns, key)
+    def removeState(self, key):
+        return self.remove(self.state_ns, key)
 
-    async def getOurIdentity(self):
-        serialized = await self.getState('ourIdentityKey')
+    def getOurIdentity(self):
+        serialized = self.getState('ourIdentityKey')
         return IdentityKeyPair(serialized=serialized)
+    getIdentityKeyPair = getOurIdentity
 
-    async def saveOurIdentity(self, keypair):
+    def saveOurIdentity(self, keypair):
         assert isinstance(keypair, IdentityKeyPair)
-        await self.putState('ourIdentityKey', keypair.serialize())
+        self.putState('ourIdentityKey', keypair.serialize())
 
-    async def removeOurIdentity(self):
-        await self.removeState('ourIdentityKey')
+    def removeOurIdentity(self):
+        self.removeState('ourIdentityKey')
 
-    async def getOurRegistrationId(self):
-        return await self.getState('registrationId')
+    def getOurRegistrationId(self):
+        return self.getState('registrationId')
+    getLocalRegistrationId = getOurRegistrationId
 
-    async def loadPreKey(self, keyId):
-        if not await self.has(self.prekey_ns, keyId):
+    def loadPreKey(self, keyId):
+        if not self.has(self.prekey_ns, keyId):
             raise InvalidKeyIdException(keyId)
-        serialized = await self.get(self.prekey_ns, keyId)
+        serialized = self.get(self.prekey_ns, keyId)
         return PreKeyRecord(serialized=serialized)
 
-    async def storePreKey(self, keyId, record):
+    def storePreKey(self, keyId, record):
         assert isinstance(record, PreKeyRecord)
-        await self.set(self.prekey_ns, keyId, record.serialize())
+        self.set(self.prekey_ns, keyId, record.serialize())
 
-    async def removePreKey(self, keyId):
+    def removePreKey(self, keyId):
         try:
-            await self.remove(self.prekey_ns, keyId)
+            self.remove(self.prekey_ns, keyId)
         finally:
             # Avoid circular import..
             from .. import hub
-            signal = await hub.SignalClient.factory()
-            await signal.refreshPreKeys()
+            signal = hub.SignalClient.factory()
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                loop.create_task(signal.refreshPreKeys())
+            else:
+                loop.run_until_complete(signal.refreshPreKeys())
 
-    async def loadSignedPreKey(self, keyId):
-        serialized = await self.get(self.signed_prekey_ns, keyId)
+    def loadSignedPreKey(self, keyId):
+        serialized = self.get(self.signed_prekey_ns, keyId)
         if serialized is None:
             raise InvalidKeyIdException(keyId)
         return SignedPreKeyRecord(serialized=serialized)
 
-    async def storeSignedPreKey(self, keyId, record):
+    def storeSignedPreKey(self, keyId, record):
         assert isinstance(record, SignedPreKeyRecord)
-        await self.set(self.signed_prekey_ns, keyId, record.serialize())
+        self.set(self.signed_prekey_ns, keyId, record.serialize())
 
-    async def removeSignedPreKey(self, keyId):
-        await self.remove(self.signed_prekey_ns, keyId)
+    def removeSignedPreKey(self, keyId):
+        self.remove(self.signed_prekey_ns, keyId)
 
-    async def loadSession(self, addr, deviceId):
+    def loadSession(self, addr, deviceId):
         assert '.' not in addr
-        serialized = await self.get(self.session_ns, f'{addr}.{deviceId}')
+        serialized = self.get(self.session_ns, f'{addr}.{deviceId}')
         if serialized:
-            return SessionRecord(serizlized=serialized)
+            return SessionRecord(serialized=serialized)
         else:
             return SessionRecord()
 
-    async def storeSession(self, addr, deviceId, record):
+    def storeSession(self, addr, deviceId, record):
         assert '.' not in addr
-        await self.set(self.session_ns, f'{addr}.{deviceId}',
-                       record.serialize())
+        self.set(self.session_ns, f'{addr}.{deviceId}', record.serialize())
 
-    async def deleteSession(self, addr, deviceId):
+    def deleteSession(self, addr, deviceId):
         assert '.' not in addr
-        await self.remove(self.session_ns, f'{addr}.{deviceId}')
+        self.remove(self.session_ns, f'{addr}.{deviceId}')
 
-    async def deleteAllSessions(self, addr):
+    def deleteAllSessions(self, addr):
         assert '.' not in addr
-        for x in await self.keys(self.session_ns, re.compile(addr + r'\..*')):
-            await self.remove(self.session_ns, x)
+        for x in self.keys(self.session_ns, re.compile(addr + r'\..*')):
+            self.remove(self.session_ns, x)
 
-    async def clearSessionStore(self):
-        for x in await self.keys(self.session_ns):
-            await self.remove(self.session_ns, x)
+    def clearSessionStore(self):
+        for x in self.keys(self.session_ns):
+            self.remove(self.session_ns, x)
 
-    async def isTrustedIdentity(self, addr, remoteIdentityKey):
+    def isTrustedIdentity(self, addr, remoteIdentityKey):
         assert '.' not in addr
-        localIdentityKey = await self.loadIdentity(addr)
+        localIdentityKey = self.loadIdentity(addr)
         if not localIdentityKey:
             logger.warn("WARNING: Implicit trust of peer: %s" % addr)
             return True
         return localIdentityKey == remoteIdentityKey
 
-    async def loadIdentity(self, addr):
+    def loadIdentity(self, addr):
         assert '.' not in addr
-        serialized = await self.get(self.identitykey_ns, addr)
-        return IdentityKey(serialized=serialized)
+        serialized = self.get(self.identitykey_ns, addr)
+        print(5555, serialized)
+        if serialized:
+            return IdentityKey(serialized, offset=0)
 
-    async def saveIdentity(self, addr, identKey):
+    def saveIdentity(self, addr, identKey):
         """ Returns True if the key was updated. """
         assert isinstance(identKey, IdentityKey)
         assert '.' not in addr
-        existing = await self.get(self.identitykey_ns, addr)
+        existing = self.get(self.identitykey_ns, addr)
         raw = identKey.serialize()
-        await self.set(self.identitykey_ns, addr, raw)
+        self.set(self.identitykey_ns, addr, raw)
         return not not (existing and not existing != raw)
 
-    async def removeIdentity(self, addr):
+    def removeIdentity(self, addr):
         assert '.' not in addr
-        await self.remove(self.identitykey_ns, addr)
-        await self.deleteAllSessions(addr)
+        self.remove(self.identitykey_ns, addr)
+        self.deleteAllSessions(addr)
 
-    async def getDeviceIds(self, addr):
-        idents = await self.keys(self.session_ns, re.compile(addr + r'\..*'))
+    def getDeviceIds(self, addr):
+        idents = self.keys(self.session_ns, re.compile(addr + r'\..*'))
         return [x.split('.')[1] for x in idents]
 
     def getBackingClass(self, name):
@@ -202,57 +209,12 @@ class BackingStore(AxolotlStore):
         }[name]
 
 
-class SyncStoreWrap(AxolotlStore):
-    """ A modular store that supports pluggable backends like filesystem,
-    databases. etc. """
-
-    def __init__(self, store):
-        self.__dict__ = store.__dict__
-        self._store = store
-        # Borg pattern for shared data with wrapped store.
-        for name, attribute in inspect.getmembers(store):
-            if name.startswith('__'):
-                continue
-            if asyncio.iscoroutinefunction(attribute):
-                setattr(self, name, self.syncify(attribute))
-            else:
-                setattr(self, name, attribute)
-
-    def syncify(self, awaitable):
-        def wrap(*args, **kwargs):
-            try:
-                loop = asyncio.get_event_loop()
-                print('reuse loop')
-            except RuntimeError:
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-                print('NEW loop')
-            import threading
-            print('who', threading.currentThread(), loop, awaitable, self)
-            # We can't use run_until_complete because it's not safe to use 
-            try:
-                a = loop.run_until_complete(awaitable(*args, **kwargs))
-            finally:
-                loop.stop()
-                asyncio.set_event_loop(None)
-            print("YES", a)
-            return a
-        return wrap
-
-
-_store = None
-
 def getStore():
     global _store
     if _store is None:
         _store = BackingStore()
-        asyncio.get_event_loop().run_until_complete(_store.initialize())
+        _store.initialize()
     return _store
-
-
-def getSyncStore():
-    """ Return a syncronous wrapper of the store interface. """
-    return SyncStoreWrap(getStore())
 
 
 def setStore(store):

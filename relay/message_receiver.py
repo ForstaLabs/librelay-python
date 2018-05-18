@@ -27,17 +27,16 @@ class MessageReceiver(eventing.EventTarget):
         self.addr = addr
         self.device_id = device_id
         self.signaling_key = signaling_key
-        self.syncStore = storage.getSyncStore()
         if not no_web_socket:
             url = self.signal.getMessageWebSocketUrl()
             self.wsr = WebSocketResource(url, handleRequest=self.handleRequest)
 
     @classmethod
-    async def factory(cls, no_web_socket=False):
-        signal = await hub.SignalClient.factory()
-        addr = await store.getState('addr')
-        device_id = await store.getState('deviceId')
-        signaling_key = await store.getState('signalingKey')
+    def factory(cls, no_web_socket=False):
+        signal = hub.SignalClient.factory()
+        addr = store.getState('addr')
+        device_id = store.getState('deviceId')
+        signaling_key = store.getState('signalingKey')
         return cls(signal, addr, device_id, signaling_key, no_web_socket)
 
     async def checkRegistration(self):
@@ -199,7 +198,7 @@ class MessageReceiver(eventing.EventTarget):
         return await loop.run_in_executor(None, callback, *args, **kwargs)
 
     async def decrypt(self, envelope, ciphertext):
-        stores = [self.syncStore] * 4
+        stores = [store] * 4
         sessionCipher = SessionCipher(*stores, envelope.source, envelope.sourceDevice)
         if envelope.type == envelope.CIPHERTEXT:
             #return self.unpad(await sessionCipher.decryptMsg(ciphertext))
@@ -313,7 +312,7 @@ class MessageReceiver(eventing.EventTarget):
                                                           attachment.key)
 
     async def handleEndSession(self, addr):
-        device_ids = await store.getDeviceIds(addr)
+        device_ids = store.getDeviceIds(addr)
         jobs = []
         for device_id in device_ids:
             address = libsignal.SignalProtocolAddress(addr, device_id)

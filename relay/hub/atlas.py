@@ -56,9 +56,9 @@ class AtlasClient(object):
         self._httpClient = None
 
     @classmethod
-    async def factory(cls):
-        url = await store.getState(url_store_key)
-        jwt = await store.getState(cred_store_key)
+    def factory(cls):
+        url = store.getState(url_store_key)
+        jwt = store.getState(cred_store_key)
         return cls(url=url, jwt=jwt)
 
     @classmethod
@@ -74,8 +74,8 @@ class AtlasClient(object):
         user, org = client.parse_tag(user_tag)
         auth = await client.fetch('/v1/login/authtoken/', method='POST',
                                   json={"authtoken": f'{org}:{user}:{code}'})
-        await store.putState(cred_store_key, auth['token'])
-        await store.putState(url_store_key, client.url)
+        store.putState(cred_store_key, auth['token'])
+        store.putState(url_store_key, client.url)
         return cls(url=client.url, jwt=auth['token'])
 
     @classmethod
@@ -83,8 +83,8 @@ class AtlasClient(object):
         client = cls(**options)
         auth = await client.fetch('/v1/login/authtoken/', method="POST",
                                   json={"userauthtoken": userauthtoken})
-        await store.putState(cred_store_key, auth.token)
-        await store.putState(url_store_key, client.url)
+        store.putState(cred_store_key, auth.token)
+        store.putState(url_store_key, client.url)
         return cls(url=client.url, jwt=auth['token'])
 
     def parse_tag(self, tag):
@@ -109,10 +109,10 @@ class AtlasClient(object):
                            on_refresh=None):
         """ Manage auth token expiration.  This routine will reschedule itself
         as needed. """
-        token = decode_jwt(await store.getState(cred_store_key))
+        token = decode_jwt(store.getState(cred_store_key))
         refresh_delay = lambda t: (t['payload']['exp'] - time.time()) / 2
         if force_refresh or refresh_delay(token) < 1:
-            encoded_token = await store.getState(cred_store_key)
+            encoded_token = store.getState(cred_store_key)
             resp = await self.fetch('/v1/api-token-refresh/', method="POST",
                                     json={"token": encoded_token})
             if not resp or not resp['token']:
@@ -126,7 +126,7 @@ class AtlasClient(object):
                 jwt = resp['token']
             token = decode_jwt(jwt)
             logger.info("Refreshed JWT in maintain_jwt")
-            await store.putState(cred_store_key, jwt)
+            store.putState(cred_store_key, jwt)
             self.auth_header = 'JWT ' + jwt
             self.user_id = token['payload']['user_id']
             if on_refresh:

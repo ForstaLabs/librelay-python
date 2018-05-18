@@ -4,25 +4,25 @@ class StorageInterface(object):
     def __init__(self, label):
         self.label = label
 
-    async def initialize(self):
+    def initialize(self):
         pass
 
-    async def set(self, ns, key, value):
+    def set(self, ns, key, value):
         raise NotImplementedError("Required impl by subclass");
 
-    async def get(self, ns, key):
+    def get(self, ns, key):
         """ If key not found should throw ReferenceError """
         raise NotImplementedError("Required impl by subclass");
 
-    async def has(self, ns, key):
+    def has(self, ns, key):
         raise NotImplementedError("Not Implemented");
         raise NotImplementedError("Required impl by subclass");
 
-    async def remove(self, ns, key):
+    def remove(self, ns, key):
         raise NotImplementedError("Required impl by subclass");
 
-    async def keys(self, ns, regex=None):
+    def keys(self, ns, regex=None):
         raise NotImplementedError("Required impl by subclass");
 
-    async def shutdown(self):
+    def shutdown(self):
         pass

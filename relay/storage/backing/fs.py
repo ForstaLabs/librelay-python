@@ -15,7 +15,7 @@ class FSBacking(interface.StorageInterface):
     def to_path(self, ns, key):
         return Path(self.root, ns, key)
 
-    async def set(self, ns, key, value):
+    def set(self, ns, key, value):
         d = Path(self.root, ns)
         for _ in range(2):
             try:
@@ -24,23 +24,23 @@ class FSBacking(interface.StorageInterface):
             except FileNotFoundError:
                 d.mkdir(parents=True)
 
-    async def get(self, ns, key):
+    def get(self, ns, key):
         try:
             with open(self.to_path(ns, key)) as f:
                 return f.read()
         except FileNotFoundError:
             raise ReferenceError(key)
 
-    async def has(self, ns, key):
+    def has(self, ns, key):
         return self.to_path(ns, key).is_file()
 
-    async def remove(self, ns, key):
+    def remove(self, ns, key):
         try:
             self.to_path(ns, key).unlink()
         except FileNotFoundError:
             pass
 
-    async def keys(self, ns, regex=None):
+    def keys(self, ns, regex=None):
         try:
             scanit = os.scandir(Path(self.root, ns))
         except FileNotFoundError:

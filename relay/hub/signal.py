@@ -2,6 +2,7 @@ import aiohttp
 import asyncio
 import logging
 import re
+from .. import protobufs
 from .. import storage
 from ..provisioning_cipher import ProvisioningCipher
 from axolotl.util.keyhelper import KeyHelper
@@ -43,19 +44,19 @@ class SignalClient(object):
         self._httpClient = None
 
     @classmethod
-    async def factory(cls):
-        url = await store.getState('serverUrl')
-        username = await store.getState('username')
-        password = await store.getState('password')
+    def factory(cls):
+        url = store.getState('serverUrl')
+        username = store.getState('username')
+        password = store.getState('password')
         return cls(username, password, url)
 
     async def linkDevice(self, uuid, pubkey, userAgent='librelay-python'):
         provision_resp = await self.request(call='devices',
                                             urn='/provisioning/code')
-        our_ident = await store.getOurIdentity()
+        our_ident = store.getOurIdentity()
         pMessage = protobufs.ProvisionMessage()
         pMessage.identityKeyPrivate = our_ident.getPrivateKey().serialize()
-        pMessage.addr = await store.getState('addr')
+        pMessage.addr = store.getState('addr')
         pMessage.userAgent = userAgent
         pMessage.provisioningCode = provision_resp.verificationCode
         provisioningCipher = ProvisioningCipher()
@@ -77,30 +78,30 @@ class SignalClient(object):
             await self.register_keys(await self.generate_keys(fill))
 
     async def generateKeys(self, count=100):
-        startId = await store.getState('maxPreKeyId') or 1
-        signedKeyId = await store.getState('signedKeyId') or 1
-        ourIdent = await store.getOurIdentity()
+        startId = store.getState('maxPreKeyId') or 1
+        signedKeyId = store.getState('signedKeyId') or 1
+        ourIdent = store.getOurIdentity()
         result = {
             "identityKey": ourIdent.getPublicKey().serialize(),
             "preKeys": []
         }
         preKeys = KeyHelper.generatePreKeys(startId, count)
         for pk in preKeys:
-            await store.storePreKey(pk.getId(), pk)
+            store.storePreKey(pk.getId(), pk)
             result['preKeys'].append({
                 "keyId": pk.getId(),
                 "publicKey": pk.getKeyPair().getPublicKey().serialize()
             })
         signedPreKey = KeyHelper.generateSignedPreKey(ourIdent, signedKeyId)
-        await store.storeSignedPreKey(signedPreKey.getId(), signedPreKey)
+        store.storeSignedPreKey(signedPreKey.getId(), signedPreKey)
         result['signedPreKey'] = {
             "keyId": signedPreKey.getId(),
             "publicKey": signedPreKey.getKeyPair().getPublicKey().serialize(),
             "signature": signedPreKey.getSignature()
         }
-        await store.removeSignedPreKey(signedKeyId - 2)
-        await store.putState('maxPreKeyId', startId + count)
-        await store.putState('signedKeyId', signedKeyId + 1)
+        store.removeSignedPreKey(signedKeyId - 2)
+        store.putState('maxPreKeyId', startId + count)
+        store.putState('signedKeyId', signedKeyId + 1)
         return result
 
     def authHeader(self, username, password):
@@ -112,8 +113,8 @@ class SignalClient(object):
         headers = {}
         if username and password:
             headers['Authorization'] = self.authHeader(username, password)
-        async with await self.fetch(path, method=method, json=json,
-                                    headers=headers) as r:
+        async with self.fetch(path, method=method, json=json,
+                              headers=headers) as r:
             is_json = r.content_type.startswith('application/json')
             resp_content = await r.json() if is_json else await r.text()
         # Can we just use native exceptions from aiohttp?? please
@@ -126,7 +127,7 @@ class SignalClient(object):
         #    raise e
         return resp_content
 
-    async def fetch(self, urn, headers=None, **kwargs):
+    def fetch(self, urn, headers=None, **kwargs):
         """ Thin wrapper to augment json and auth support. """
         if headers is None:
             headers = {}

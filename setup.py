@@ -15,7 +15,7 @@ def long_desc():
         return pypandoc.convert(README, 'rst')
 
 setup(
-    name='relay',
+    name='librelay',
     version='0.1.0',
     description='Forsta messaging protocol library',
     author='Justin Mayfield',

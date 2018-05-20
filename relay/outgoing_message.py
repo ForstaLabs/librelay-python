@@ -4,6 +4,7 @@ import datetime
 import logging
 import traceback
 from . import errors, storage, protobufs
+from .queue_async import queue_async
 from axolotl.sessionbuilder import SessionBuilder
 from axolotl.sessioncipher import SessionCipher
 from axolotl.state.prekeybundle import PreKeyBundle
@@ -194,8 +195,10 @@ class OutgoingMessage(object):
             store.deleteSession(addr, x)
 
     async def sendToAddr(self, addr):
+        """ Serialized send routine that protects session from corruption. """
+        bucket = f'outgoing-msg-{addr}'
         try:
-            await self._sendToAddr(addr)
+            await queue_async(bucket, self._sendToAddr(addr))
         except Exception as e:
             await self.emitError(addr, "Send error", e)
             raise

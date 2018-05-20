@@ -12,7 +12,6 @@ from . import crypto, eventing, hub, storage
 from . import protobufs
 from .attachment import Attachment
 from .outgoing_message import OutgoingMessage
-from .queue_async import queue_async
 
 store = storage.getStore()
 logger = logging.getLogger(__name__)
@@ -158,8 +157,7 @@ class MessageSender(eventing.EventTarget):
         logger.debug(f"Sending to: {addrs}")
         m = OutgoingMessage(self.signal, timestamp, msgProto)
         m.on('keychange', self.onKeyChange)
-        sending = [queue_async(f'outmsg-{x}', m.sendToAddr(x)) for x in addrs]
-        for res in asyncio.as_completed(sending):
+        for res in asyncio.as_completed([m.sendToAddr(x) for x in addrs]):
             try:
                 await res
             except Exception as e:

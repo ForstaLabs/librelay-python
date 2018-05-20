@@ -1,9 +1,11 @@
-librelay-python - Forsta Relay Python library
+librelay-python
 ========
 Signal based Python library for end-to-end crypto with Forsta messaging platform.
 
-
-[![Change Log](https://img.shields.io/badge/change-log-blue.svg)](https://github.com/mayfield/librelay-python/blob/master/CHANGELOG.md)
+[![Maturity](https://img.shields.io/pypi/status/librelay.svg)](https://pypi.python.org/pypi/librelay)
+[![License](https://img.shields.io/pypi/l/librelay.svg)](https://pypi.python.org/pypi/librelay)
+[![Change Log](https://img.shields.io/badge/change-log-blue.svg)](https://github.com/ForstaLabs/librelay-python/blob/master/CHANGELOG.md)
+[![Version](https://img.shields.io/pypi/v/librelay.svg)](https://pypi.python.org/pypi/librelay)
 
 
 About
@@ -19,7 +21,7 @@ Installation
 --------
 Ensure that you are using Python 3.6 or higher and simply install from GitHub:
 
-    $ pip3 install https://github.com/mayfield/librelay-python
+    $ pip3 install librelay
 
 
 Storage

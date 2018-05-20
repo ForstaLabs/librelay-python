@@ -10,9 +10,10 @@ def sign(key, data):
     return m.digest()
 
 
-def verifyMAC(data, key, mac, length):
+def verifyMAC(data, key, mac):
     calculated_mac = sign(key, data)
-    return mac[:length] == calculated_mac[:length]
+    length = len(mac)
+    return mac == calculated_mac[:length]
 
 
 def decryptWebSocketMessage(message, signaling_key):
@@ -29,7 +30,7 @@ def decryptWebSocketMessage(message, signaling_key):
     ciphertext = message[1 + 16:-10]
     ivAndCiphertext = message[:-10]
     mac = message[-10:]
-    verifyMAC(ivAndCiphertext, mac_key, mac, 10)
+    verifyMAC(ivAndCiphertext, mac_key, mac)
     return AESCipher(aes_key, iv).decrypt(ciphertext)
 
 
@@ -44,8 +45,7 @@ def decryptAttachment(encryptedBin, keys):
     ciphertext = encryptedBin[16:-32]
     ivAndCiphertext = encryptedBin[:-32]
     mac = encryptedBin[-32:]
-    wm = WhisperMessage()
-    wm.verifyMAC(1, ivAndCiphertext, mac_key, mac)
+    verifyMAC(ivAndCiphertext, mac_key, mac)
     return AESCipher(aes_key, iv).decrypt(ciphertext)
 
 

@@ -201,6 +201,7 @@ class MessageReceiver(eventing.EventTarget):
                 return self.unpad(sessionCipher.decryptPkmsg(msg))
             except Exception as exc:
                 logger.exception("DERP")
+                import pdb;pdb.set_trace()
                 # XXX port
                 print(2222, exc)
                 print(2222, exc)
@@ -213,7 +214,6 @@ class MessageReceiver(eventing.EventTarget):
     async def handleSentMessage(self, sent, envelope):
         if sent.message.flags & sent.message.END_SESSION:
             await self.handleEndSession(sent.destination)
-        await self.processDecrypted(sent.message, self.addr)
         ev = eventing.Event('sent')
         ev.data = {
             "source": envelope.source,
@@ -229,7 +229,6 @@ class MessageReceiver(eventing.EventTarget):
     async def handleDataMessage(self, message, envelope, content):
         if message.flags & message.END_SESSION:
             await self.handleEndSession(envelope.source)
-        await self.processDecrypted(message, envelope.source)
         ev = eventing.Event('message')
         ev.data = {
             "timestamp": envelope.timestamp,
@@ -292,10 +291,10 @@ class MessageReceiver(eventing.EventTarget):
     def handleBlocked(self, blocked):
         raise Exception("UNSUPPORTRED")
 
-    async def handleAttachment(self, attachment):
-        encrypted = await self.signal.getAttachment(attachment.id)
-        attachment.data = await crypto.decryptAttachment(encrypted,
-                                                          attachment.key)
+    async def getAttachment(self, attachment):
+        """ Download and decrypt attachment pointer. """
+        cipher = await self.signal.getAttachment(attachment.id)
+        return crypto.decryptAttachment(cipher, attachment.key)
 
     async def handleEndSession(self, addr):
         device_ids = store.getDeviceIds(addr)
@@ -305,13 +304,3 @@ class MessageReceiver(eventing.EventTarget):
             sessionCipher = libsignal.SessionCipher(store, address)
             logger.warning('Closing session for', addr, device_id)
             sessionCipher.closeOpenSessionForDevice()
-
-    async def processDecrypted(self, msg, source):
-        """ Now that its decrypted, validate the message and clean it up for
-        consumer processing.  Note that messages may (generally) only perform
-        one action and we ignore remaining fields after the first action. """
-        if msg.flags & msg.END_SESSION:
-            return msg
-        if msg.attachments:
-            await asyncio.gather(map(self.handleAttachment, msg.attachments))
-        return msg

@@ -2,6 +2,7 @@ import aiohttp
 import asyncio
 import logging
 import re
+import yarl
 from .. import protobufs, storage, errors
 from ..provisioning_cipher import ProvisioningCipher
 from axolotl.ecc.curve import Curve
@@ -190,8 +191,9 @@ class SignalClient(object):
 
     async def getAttachment(self, id):
         """ XXX Build in retry handling... """
-        ptr_resp = await self.request(call='attachment', urn='/' + id)
-        async with self._httpClient.get(ptr_resp['location']) as r:
+        ptr = await self.request(call='attachment', urn=f'/{id}')
+        headers = {"content-type": 'application/octet-stream'}
+        async with self._httpClient.get(ptr['location'], headers=headers) as r:
             return await r.read()
 
     async def putAttachment(self, body):
@@ -205,7 +207,8 @@ class SignalClient(object):
             logger.error('Invalid attachment url for outgoing message',
                           ptr_resp['location'])
             raise TypeError('Received invalid attachment url')
-        async with self._httpClient.put(ptr_resp['location'], data=body):
+        url = yarl.URL(ptr_resp['location'], encoded=True)
+        async with self._httpClient.put(url, data=body):
             pass
         return match[1]
 

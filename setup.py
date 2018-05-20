@@ -16,11 +16,11 @@ def long_desc():
 
 setup(
     name='librelay',
-    version='0.1.0',
+    version='0.2.0',
     description='Forsta messaging protocol library',
     author='Justin Mayfield',
     author_email='tooker@gmail.com',
-    url='https://github.com/mayfield/librelay-python',
+    url='https://github.com/ForstaLabs/librelay-python',
     license='GPL',
     long_description=long_desc(),
     packages=find_packages(),

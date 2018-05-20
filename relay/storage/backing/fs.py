@@ -42,10 +42,10 @@ class FSBacking(interface.StorageInterface):
 
     def keys(self, ns, regex=None):
         try:
-            scanit = os.scandir(Path(self.root, ns))
+            files = [x.name for x in os.scandir(Path(self.root, ns))]
         except FileNotFoundError:
             return []
         if regex:
-            return [x for x in scanit if regex.match(x)]
+            return [x for x in files if regex.match(x)]
         else:
-            return list(scanit)
+            return files

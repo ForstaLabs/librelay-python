@@ -4,8 +4,10 @@ import logging
 import re
 from .. import protobufs, storage, errors
 from ..provisioning_cipher import ProvisioningCipher
+from axolotl.ecc.curve import Curve
+from axolotl.identitykey import IdentityKey
 from axolotl.util.keyhelper import KeyHelper
-from base64 import b64decode, b64encode
+from base64 import b64decode as _b64decode, b64encode
 
 store = storage.getStore()
 logger = logging.getLogger(__name__)
@@ -27,6 +29,13 @@ SIGNAL_HTTP_MESSAGES = {
 }
 
 
+def b64decode(data):
+    missing_padding = len(data) % 4
+    if missing_padding:
+        data += '=' * (4 - missing_padding)
+    return _b64decode(data)
+
+
 class SignalClient(object):
 
     attachment_id_regex = re.compile("^https://.*/(\\d+)?")
@@ -35,8 +44,7 @@ class SignalClient(object):
         self.url = url
         self.username = username
         self.password = password
-        self._httpClient = aiohttp.ClientSession(read_timeout=30,
-                                                 raise_for_status=True)
+        self._httpClient = aiohttp.ClientSession(read_timeout=30)
 
     def __del__(self):
         asyncio.get_event_loop().create_task(self._httpClient.close())
@@ -128,7 +136,7 @@ class SignalClient(object):
             is_json = resp.content_type.startswith('application/json')
             result = await resp.json() if is_json else await resp.text()
             logger.debug(f"Signal Response: {urn} {method}: [{resp.status}] {result}")
-            if not resp.ok:
+            if resp.status < 200 or resp.status >= 400:
                 e = errors.ProtocolError(resp.status, result)
                 if e.code in SIGNAL_HTTP_MESSAGES:
                     e.message = SIGNAL_HTTP_MESSAGES[e.code]
@@ -162,12 +170,17 @@ class SignalClient(object):
     async def getKeysForAddr(self, addr, device_id='*'):
         res = await self.request(call='keys',
                                  urn=f'/{addr}/{device_id}')
-        res['identityKey'] = b64decode(res['identityKey'])
+        res['identityKey'] = IdentityKey(b64decode(res['identityKey']),
+                                         offset=0)
         for device in res['devices']:
             if device['preKey']:
-                device['preKey']['publicKey'] = b64decode(device['preKey']['publicKey'])
-            device['signedPreKey']['publicKey'] = b64decode(device['signedPreKey']['publicKey'])
-            device['signedPreKey']['signature'] = b64decode(device['signedPreKey']['signature'])
+                raw = b64decode(device['preKey']['publicKey'])
+                device['preKey']['publicKey'] = Curve.decodePoint(raw)
+            raw = b64decode(device['signedPreKey']['publicKey'])
+            device['signedPreKey']['publicKey'] = Curve.decodePoint(raw)
+            print(device['signedPreKey']['signature'])
+            device['signedPreKey']['signature'] = \
+                b64decode(device['signedPreKey']['signature'])
         return res
 
     async def sendMessages(self, destination, messages, timestamp):

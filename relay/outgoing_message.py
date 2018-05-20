@@ -1,10 +1,13 @@
 
-import asyncio
+import base64
 import datetime
 import logging
+import traceback
 from . import errors, storage
+from axolotl.ecc.curve import Curve
 from axolotl.sessionbuilder import SessionBuilder
 from axolotl.sessioncipher import SessionCipher
+from axolotl.state.prekeybundle import PreKeyBundle
 
 logger = logging.getLogger(__name__)
 store = storage.getStore()
@@ -42,7 +45,9 @@ class OutgoingMessage(object):
                 logger.exception("Event callback error")
 
     async def emitError(self, addr, reason, error):
-        logger.error(error)
+        trace = ''.join(traceback.format_exception(type(error), error,
+                                                     error.__traceback__))
+        logger.error(f'{reason}: {error}\n{trace}')
         if not error or isinstance(error, errors.ProtocolError) and \
            error.code != 404:
             error = errors.OutgoingMessageError(addr, self.message,
@@ -68,44 +73,63 @@ class OutgoingMessage(object):
         deviceIds = store.getDeviceIds(addr)
         return await self.doSendMessage(addr, deviceIds, recurse=recurse)
 
+
     async def getKeysForAddr(self, addr, updateDevices=None, reentrant=False):
-        """ XXX this whole thing needs a lot of scrutiny. """
-        async def handleResult(response):
-            jobs = []
-            import pdb;pdb.set_trace()
-            for x in response['devices']:
-                async def fn(device):
-                    device.identityKey = response.identityKey
-                    if updateDevices is None or device.deviceId in updateDevices:
-                        stores = [store] * 4
-                        builder = SessionBuilder(*stores, addr,
-                                                 device.deviceId)
-                        try:
-                            builder.processPreKey(device)
-                        except Exception as e:
-                            # XXX
-                            if e.message == "Identity key changed":
-                                keyError = errors.OutgoingIdentityKeyError(addr,
-                                    self.message, self.timestamp, device.identityKey)
-                                keyError.stack = e.stack
-                                keyError.message = e.message
-                                if not reentrant:
-                                    await self.emit('keychange', keyError)
-                                    if not keyError.accepted:
-                                        raise keyError
-                                    await self.getKeysForAddr(addr, updateDevices,
-                                                              reentrant=True)
-                                else:
-                                    raise keyError
-                            else:
-                                raise e
-            jobs.append(fn(x))
-            await asyncio.gather(jobs)
+
+        our_ident = None
+
+        async def buildSessions(remote_keys):
+            """ Start new sessions (eg. prekeybundles) for this addr.  If devices
+            is present, only produce sessions for the ids in that sequence.  """
+            for device in remote_keys['devices']:
+                if updateDevices is not None and \
+                   device['deviceId'] not in updateDevices:
+                    continue
+                stores = [store] * 4
+                builder = SessionBuilder(*stores, addr, device['deviceId'])
+                pk = device['preKey'] or {}
+                spk = device['signedPreKey']
+                nonlocal our_ident
+                if our_ident is None:
+                    our_ident = store.getIdentityKeyPair()
+                sig = Curve.calculateSignature(our_ident.getPrivateKey(),
+                                               spk['publicKey'].serialize())
+                pkb = PreKeyBundle(device['registrationId'],
+                                   device['deviceId'], pk.get('keyId'),
+                                   pk.get('publicKey'), spk['keyId'],
+                                   spk['publicKey'], spk['signature'], #sig,
+                                   remote_keys['identityKey'])
+                                   #our_ident.getPublicKey())
+                builder.processPreKeyBundle(pkb)
+                try:
+                    None
+                except Exception as e:
+                    # XXX
+                    print(e)
+                    print(type(e))
+                    print(e)
+                    if e.message == "Identity key changed":
+                        import pdb;pdb.set_trace()
+                        keyError = errors.OutgoingIdentityKeyError(addr,
+                            self.message, self.timestamp, device['identityKey'])
+                        keyError.stack = e.stack
+                        keyError.message = e.message
+                        if not reentrant:
+                            await self.emit('keychange', keyError)
+                            if not keyError.accepted:
+                                raise keyError
+                            await self.getKeysForAddr(addr, updateDevices,
+                                                      reentrant=True)
+                        else:
+                            raise keyError
+                    else:
+                        raise e
 
         if updateDevices is None:
             try:
-                await handleResult(await self.signal.getKeysForAddr(addr))
+                await buildSessions(await self.signal.getKeysForAddr(addr))
             except Exception as e:
+                print('xxxxxxx', e)
                 import pdb;pdb.set_trace() # Catch just protocol error for 404 XXX
                 if isinstance(e, errors.ProtocolError) and e.code == 404:
                     logger.warning(f'Unregistered address (no devices): {addr}')
@@ -114,9 +138,12 @@ class OutgoingMessage(object):
                     raise
         else:
             for device in updateDevices:
+                await buildSessions(await self.signal.getKeysForAddr(addr, device))
                 try:
-                    await handleResult(await self.signal.getKeysForAddr(addr, device))
+                    #await buildSessions(await self.signal.getKeysForAddr(addr, device))
+                    pass
                 except Exception as e:
+                    print('xxxxxxx', e)
                     import pdb;pdb.set_trace() # Catch just protocol error for 404 XXX
                     if isinstance(e, errors.ProtocolError) and e.code == 404:
                         self.removeDeviceIdsForAddr(addr, [device])
@@ -127,10 +154,8 @@ class OutgoingMessage(object):
         try:
             return await self.signal.sendMessages(addr, json, timestamp)
         except errors.ProtocolError as e:
-            if e.status == 404:
+            if e.code == 404:
                 raise errors.UnregisteredUserError(addr, e)
-            elif e.status not in (409, 410):
-                raise errors.SendMessageError(addr, json, e, timestamp)
             else:
                 raise
 
@@ -186,16 +211,12 @@ class OutgoingMessage(object):
             await self.emitSent(addr)
 
     def encryptToDevice(self, deviceId, buf, sessionCipher):
-        encrypted = sessionCipher.encrypt(buf)
-        return self.toJSON(deviceId, encrypted)
-
-    def toJSON(self, deviceId, encryptedMsg):
-        # XXX
+        msg = sessionCipher.encrypt(buf)
         return {
-            "type": encryptedMsg.type,
+            "type": msg.getType(),
             "destinationDeviceId": deviceId,
-            "destinationRegistrationId": encryptedMsg.registrationId,
-            "content": encryptedMsg.body.toString('base64')
+            "destinationRegistrationId": msg.registrationId,
+            "content": base64.b64encode(msg.serialize()).decode()
         }
 
     async def reopenClosedSessions(self, addr):

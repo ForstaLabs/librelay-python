@@ -199,7 +199,7 @@ class BackingStore(AxolotlStore):
 
     def getDeviceIds(self, addr):
         idents = self.keys(self.session_ns, re.compile(addr + r'\..*'))
-        return [x.split('.')[1] for x in idents]
+        return [int(x.split('.')[1]) for x in idents]
 
     def getBackingClass(self, name):
         return {

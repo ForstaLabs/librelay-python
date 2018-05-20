@@ -73,7 +73,6 @@ class OutgoingMessage(object):
         deviceIds = store.getDeviceIds(addr)
         return await self.doSendMessage(addr, deviceIds, recurse=recurse)
 
-
     async def getKeysForAddr(self, addr, updateDevices=None, reentrant=False):
 
         our_ident = None
@@ -176,7 +175,8 @@ class OutgoingMessage(object):
         for x in deviceIds:
             try:
                 ciphers[x] = sc = SessionCipher(*stores, addr, x)
-                messages.append(self.encryptToDevice(x, paddedBuf, sc))
+                state = store.loadSession(addr, x).getSessionState()
+                messages.append(self.encryptToDevice(x, state.getRemoteRegistrationId(None), paddedBuf, sc))
             except Exception as e:
                 await self.emitError(addr, "Failed to create message", e)
                 return
@@ -210,12 +210,12 @@ class OutgoingMessage(object):
         else:
             await self.emitSent(addr)
 
-    def encryptToDevice(self, deviceId, buf, sessionCipher):
+    def encryptToDevice(self, deviceId, deviceRegId, buf, sessionCipher):
         msg = sessionCipher.encrypt(buf)
         return {
             "type": msg.getType(),
             "destinationDeviceId": deviceId,
-            "destinationRegistrationId": msg.registrationId,
+            "destinationRegistrationId": deviceRegId,
             "content": base64.b64encode(msg.serialize()).decode()
         }
 

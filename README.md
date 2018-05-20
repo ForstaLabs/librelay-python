@@ -26,16 +26,11 @@ Storage
 --------
 Librelay needs a backing store for holding crypto material.  The default
 storage backing is `fs` which will store files in your local file-system
-under `~/.librelay/storage`.  Redis is also supported by setting
-`RELAY_STORAGE_BACKING=redis` in your env or calling
-`librelay.storage.setBacking('redis')`.  To support multiple instances of
-librelay on a single backing store use
+under `~/.librelay/storage`.
+
+To support multiple instances of librelay on a single computer use
 `librelay.storage.setLabel('<something-unique>')` to shard your storage into
 a unique namespace.
-
-You'll need to ensure your backing store is running properly with a call 
-to (async) `librelay.storage.initialize()`, and if possible you should 
-tear it down before quitting, with (async) `librelay.storage.shutdown()`.
 
 
 Provisioning
@@ -44,32 +39,24 @@ PREREQUISITE: To use librelay you must first have a valid Forsta account.  You
 can sign-up for free at <https://app.forsta.io/join>.  Once you have a valid
 Forsta account you need to provision your librelay based application. 
 
-With your Forsta account (e.g. `myusername:myorgname`) you can get started
+With your Forsta account (e.g. `@myusername:myorgname`) you can get started
 with the `registerAccount` function or the `registerDevice` function if adding
 supplemental devices.
 
-XXX TODO port to python
-```javascript
-const relay = require('librelay');
+```python
+import asyncio
+import relay
 
-async function main(secondary) {
-    const userTag = await relay.util.consoleInput("Enter your login (e.g user:org): ");
-    const validator = await relay.AtlasClient.requestAuthenticationCode(userTag);
-    await validator(await relay.util.consoleInput("SMS Verification Code: "));
-    if (secondary) {
-        const registration = await relay.registerDevice();
-        console.info("Awaiting auto-registration response...");
-        await registration.done;
-        console.info("Successfully registered new device");
-    } else {
-        await relay.registerAccount();
-        console.info("Successfully registered account");
-    }
-}
+async def main():
+    userTag = input("Enter your login (e.g user:org): ")
+    validator = await relay.AtlasClient.requestAuthenticationCode(userTag)
+    await validator(input("SMS Verification Code: "))
+    await relay.registerAccount();
+    print("Successfully registered account")
 
-main();
+asyncio.get_event_loop().run_until_complete(main())
 ```
-Ref: <https://github.com/ForstaLabs/librelay-node/blob/master/examples/register.js>
+Ref: <https://github.com/ForstaLabs/librelay-python/blob/master/examples/register.py>
 
 
 Message Receiving
@@ -79,51 +66,41 @@ platform.   The simplest way to get familiar with the platform is to listen
 for incoming messages and examine the content sent to your application in a
 debugger.   Here is a very simple example of receiving messages.
 
-```javascript
-const relay = require('librelay');
+```python
+import asyncio
+import relay
 
-function onMessage(ev) {
-    const message = ev.data;
-    console.info("Got message", message);
-}
+async def onMessage(ev):
+    print("Got message", ev.data)
 
-async function main() {
-    const msgReceiver = await relay.MessageReceiver.factory();
-    msgReceiver.addEventListener('message', onMessage);
-    await msgReceiver.connect();
-}
 
-main();
+async def main():
+    msgReceiver = relay.MessageReceiver.factory()
+    msgReceiver.addEventListener('message', onMessage)
+    await msgReceiver.connect()
+    await msgReceiver.closed()
+
+asyncio.get_event_loop().run_until_complete(main())
 ```
-Ref: <https://github.com/ForstaLabs/librelay-node/blob/master/examples/recvmessage.js>
+Ref: <https://github.com/ForstaLabs/librelay-python/blob/master/examples/recvmessage.py>
 
 
 Message Sending
 -------
-*This example reads text from standard input and forwards to a hard coded
-thread.*
-```javascript
-const process = require('process');
-const relay = require('librelay');
+```python
+import asyncio
+import relay
 
-async function main() {
-    const argv = process.argv;
-    if (argv.length < 4) {
-        console.error(`Usage: ${argv[0]} ${argv[1]} TO MESSAGE [THREADID]`);
-        return process.exit(2);
-    }
 
-    const sender = await relay.MessageSender.factory();
-    await sender.send({
-        to: argv[2],
-        text: argv[3],
-        threadId: argv[4] || '00000000-1111-2222-3333-444444444444'
-    });
-}
+async def main():
+    msgSender = relay.MessageSender.factory()
+    to = input("To: ")  # Should be tag format. e.g @support:forsta.io
+    text = input("Message: ")
+    await msgSender.send(to=to, text=text)
 
-main();
+asyncio.get_event_loop().run_until_complete(main())
 ```
-Ref: <https://github.com/ForstaLabs/librelay-node/blob/master/examples/sendmessage.js>
+Ref: <https://github.com/ForstaLabs/librelay-python/blob/master/examples/sendmessage.py>
 
 
 Cryptography Notice

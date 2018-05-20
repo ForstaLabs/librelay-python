@@ -179,7 +179,6 @@ class BackingStore(AxolotlStore):
     def loadIdentity(self, addr):
         assert '.' not in addr
         serialized = self.get(self.identitykey_ns, addr)
-        print(5555, serialized)
         if serialized:
             return IdentityKey(serialized, offset=0)
 

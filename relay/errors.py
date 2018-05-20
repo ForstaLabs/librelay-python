@@ -6,8 +6,9 @@ class IdentityKeyError(RelayError):
 
     def __init__(self, addr, key):
         self.identitykey = key;
-        self.addr = addr.split('.')[0];
-        message = f"The identity of {self.addr} has changed"
+        self.addr = addr
+        self.accepted = False
+        message = f"The identity of {addr} has changed"
         super().__init__(message)
 
 

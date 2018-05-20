@@ -178,7 +178,6 @@ class SignalClient(object):
                 device['preKey']['publicKey'] = Curve.decodePoint(raw)
             raw = b64decode(device['signedPreKey']['publicKey'])
             device['signedPreKey']['publicKey'] = Curve.decodePoint(raw)
-            print(device['signedPreKey']['signature'])
             device['signedPreKey']['signature'] = \
                 b64decode(device['signedPreKey']['signature'])
         return res

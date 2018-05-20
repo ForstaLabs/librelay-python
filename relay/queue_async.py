@@ -2,7 +2,6 @@
 import asyncio
 import collections
 
-gc_limit = 10000
 _buckets = {}
 
 
@@ -11,16 +10,16 @@ async def _executor(bucket):
     while queue:
         scheduled = queue.popleft()
         try:
-            scheduled.set_result(await scheduled.awaitable())
+            scheduled.set_result(await scheduled.coro)
         except Exception as e:
             scheduled.set_exception(e)
     del _buckets[bucket]
 
 
-async def queue_async(bucket, awaitable):
-    """ Run the async awaitable only when all other async calls registered
-    here have completed (or thrown).  The bucket argument is a hashable
-    key representing the task queue to use. """
+async def queue_async(bucket, coro):
+    """ Chain the coro so it only runs after other coroutines in the same
+    bucket have completed (or raised). """
+    assert asyncio.iscoroutine(coro)
     if bucket not in _buckets:
         queue = _buckets[bucket] = collections.deque()
         inactive = True
@@ -28,7 +27,7 @@ async def queue_async(bucket, awaitable):
         queue = _buckets[bucket]
         inactive = False
     scheduled = asyncio.Future()
-    scheduled.awaitable = awaitable
+    scheduled.coro = coro
     queue.append(scheduled)
     if inactive:
         asyncio.get_event_loop().create_task(_executor(bucket))

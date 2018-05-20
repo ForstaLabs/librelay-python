@@ -2,6 +2,7 @@
 import logging
 from . import storage
 
+store = storage.getStore()
 logger = logging.getLogger(__name__)
 
 
@@ -17,9 +18,12 @@ class KeyChangeEvent(Event):
         super().__init__('keychange')
         self.key_error = key_error
 
-    async def accept(self):
-        await storage.remove_identity(self.key_error.addr)
-        await storage.save_identity(self.key_error.addr, self.key_error.identitykey)
+    def __str__(self):
+        return f'<KeyChangeEvent: {self.key_error}>'
+
+    def accept(self):
+        store.removeIdentity(self.key_error.addr)
+        store.saveIdentity(self.key_error.addr, self.key_error.identitykey)
         self.key_error.accepted = True
 
 

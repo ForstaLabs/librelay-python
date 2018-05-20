@@ -154,19 +154,18 @@ class MessageSender(eventing.EventTarget):
                                 self.scrubSelf(distribution['userids']))
 
     async def _send(self, msgProto, timestamp, addrs):
-        assert all(addrs), addrs
-        outmsg = OutgoingMessage(self.signal, timestamp, msgProto)
-        outmsg.on('keychange', self.onKeyChange)
-
-        async def sendWrap(addr):
+        assert all(addrs)
+        logger.debug(f"Sending to: {addrs}")
+        m = OutgoingMessage(self.signal, timestamp, msgProto)
+        m.on('keychange', self.onKeyChange)
+        sending = [queue_async(f'outmsg-{x}', m.sendToAddr(x)) for x in addrs]
+        for res in asyncio.as_completed(sending):
             try:
-                await outmsg.sendToAddr(addr)
+                await res
             except Exception as e:
-                logger.exception("Message send error to: %s" % (addr,))
+                logger.exception('Message send error')
                 await self.onError(e)
-        await asyncio.gather(*[queue_async(f'msg_send-{x}', lambda: sendWrap(x))
-                               for x in addrs])
-        return outmsg
+        return m
 
     async def onError(self, e):
         ev = eventing.Event('error')

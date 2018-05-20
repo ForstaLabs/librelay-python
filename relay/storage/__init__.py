@@ -31,7 +31,9 @@ class BackingStore(AxolotlStore):
     signed_prekey_ns = 'signedprekey'
     identitykey_ns = 'identitykey'
 
-    def __init__(self, backing=None, label='default'):
+    def __init__(self, backing=None, label=None):
+        if label is None:
+            label = os.environ.get('RELAY_STORAGE_LABEL', 'default')
         if backing is None:
             b = os.environ.get('RELAY_STORAGE_BACKING', 'fs')
             backing = self.getBackingClass(b)(label)
@@ -158,6 +160,9 @@ class BackingStore(AxolotlStore):
     def deleteSession(self, addr, deviceId):
         assert '.' not in addr
         self.remove(self.session_ns, f'{addr}.{deviceId}')
+
+    def containsSession(self, addr, deviceId):
+        return self.has(self.session_ns, f'{addr}.{deviceId}')
 
     def deleteAllSessions(self, addr):
         assert '.' not in addr

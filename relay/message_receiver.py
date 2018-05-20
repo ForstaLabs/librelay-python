@@ -194,7 +194,7 @@ class MessageReceiver(eventing.EventTarget):
         sessionCipher = SessionCipher(*stores, envelope.source, envelope.sourceDevice)
         if envelope.type == envelope.CIPHERTEXT:
             msg = WhisperMessage(serialized=ciphertext)
-            return self.unpad(self.sessionCipher.decryptMsg(msg))
+            return self.unpad(sessionCipher.decryptMsg(msg))
         elif envelope.type == envelope.PREKEY_BUNDLE:
             try:
                 msg = PreKeyWhisperMessage(serialized=ciphertext)

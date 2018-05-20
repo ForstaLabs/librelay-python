@@ -3,7 +3,7 @@ import base64
 import datetime
 import logging
 import traceback
-from . import errors, storage
+from . import errors, storage, protobufs
 from axolotl.sessionbuilder import SessionBuilder
 from axolotl.sessioncipher import SessionCipher
 from axolotl.state.prekeybundle import PreKeyBundle
@@ -180,7 +180,10 @@ class OutgoingMessage(object):
     def encryptToDevice(self, deviceId, deviceRegId, buf, sessionCipher):
         msg = sessionCipher.encrypt(buf)
         return {
-            "type": msg.getType(),
+            "type": {
+                msg.PREKEY_TYPE: protobufs.Envelope.PREKEY_BUNDLE,
+                msg.WHISPER_TYPE: protobufs.Envelope.CIPHERTEXT,
+            }[msg.getType()],
             "destinationDeviceId": deviceId,
             "destinationRegistrationId": deviceRegId,
             "content": base64.b64encode(msg.serialize()).decode()

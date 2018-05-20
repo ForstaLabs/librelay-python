@@ -165,7 +165,7 @@ class SignalClient(object):
 
     async def getMyKeys(self):
         res = await self.request(call='keys')
-        return res.count
+        return res['count']
 
     async def getKeysForAddr(self, addr, device_id='*'):
         res = await self.request(call='keys',

@@ -31,7 +31,7 @@ storage backing is `fs` which will store files in your local file-system
 under `~/.librelay/storage`.
 
 To support multiple instances of librelay on a single computer use
-`librelay.storage.setLabel('<something-unique>')` to shard your storage into
+`relay.storage.setLabel('<something-unique>')` to shard your storage into
 a unique namespace.
 
 

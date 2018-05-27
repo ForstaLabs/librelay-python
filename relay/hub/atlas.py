@@ -43,18 +43,23 @@ class AtlasClient(object):
 
     def __init__(self, url=None, jwt=None):
         self.url = url or DEFAULT_ATLAS_URL
-        if jwt:
-            jwtDict = decode_jwt(jwt)
-            self.userId = jwtDict['payload']['user_id']
-            self.orgId = jwtDict['payload']['org_id']
-            self.authHeader = 'JWT ' + jwt
-        else:
-            self.authHeader = None
+        self.setJWT(jwt)
         self._httpClient = aiohttp.ClientSession(read_timeout=30)
 
     def __del__(self):
         asyncio.get_event_loop().create_task(self._httpClient.close())
         self._httpClient = None
+
+    def setJWT(self, jwt):
+        if jwt is not None:
+            jwtDict = decode_jwt(jwt)
+            self.userId = jwtDict['payload']['user_id']
+            self.orgId = jwtDict['payload']['org_id']
+            self.authHeader = 'JWT ' + jwt
+        else:
+            self.userId = None
+            self.orgId = None
+            self.authHeader = None
 
     @classmethod
     def factory(cls):
@@ -73,20 +78,35 @@ class AtlasClient(object):
     async def authenticateViaCode(cls, userTag, code, **options):
         client = cls(**options)
         user, org = client.parseTag(userTag)
-        auth = await client.fetch('/v1/login/authtoken/', method='POST',
-                                  json={"authtoken": f'{org}:{user}:{code}'})
-        store.putState(cred_store_key, auth['token'])
-        store.putState(url_store_key, client.url)
-        return cls(url=client.url, jwt=auth['token'])
+        await client.authenticate(authtoken=f'{org}:{user}:{code}')
+        return client
 
     @classmethod
     async def authenticateViaToken(cls, userauthtoken, **options):
         client = cls(**options)
-        auth = await client.fetch('/v1/login/authtoken/', method="POST",
-                                  json={"userauthtoken": userauthtoken})
+        await client.authenticate(userauthtoken=userauthtoken)
+        return client
+
+    @classmethod
+    async def authenticateViaPassword(cls, tag_slug, password, **options):
+        client = cls(**options)
+        await client.authenticate(tag_slug=tag_slug, password=password)
+        return client
+
+    async def authenticate(self, **creds):
+        """ Creds should be an object of these supported forms..
+            1. Password auth:
+                 tag_slug: "@foo:bar",
+                 password: "secret"
+            2. SMS auth:
+                 authtoken: "123456",
+            3. Token auth:
+                 userauthtoken: "APITOKEN",
+        """
+        auth = await self.fetch('/v1/login/', method='POST', json=creds)
+        self.setJWT(auth.token)
         store.putState(cred_store_key, auth.token)
-        store.putState(url_store_key, client.url)
-        return cls(url=client.url, jwt=auth['token'])
+        store.putState(url_store_key, self.url)
 
     def parseTag(self, tag):
         user, *org = tag.lstrip('@').split(':', 1)
@@ -128,8 +148,7 @@ class AtlasClient(object):
             token = decode_jwt(jwt)
             logger.info("Refreshed JWT in maintainJWT")
             store.putState(cred_store_key, jwt)
-            self.authHeader = 'JWT ' + jwt
-            self.userId = token['payload']['user_id']
+            self.setJWT(jwt)
             if onRefresh:
                 try:
                     await onRefresh(token)

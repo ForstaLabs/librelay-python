@@ -16,7 +16,7 @@ def long_desc():
 
 setup(
     name='librelay',
-    version='0.3.0',
+    version='0.4.0',
     description='Forsta messaging protocol library',
     author='Justin Mayfield',
     author_email='tooker@gmail.com',

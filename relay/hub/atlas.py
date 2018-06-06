@@ -88,15 +88,15 @@ class AtlasClient(object):
         return client
 
     @classmethod
-    async def authenticateViaPassword(cls, tag_slug, password, **options):
+    async def authenticateViaPassword(cls, fq_tag, password, **options):
         client = cls(**options)
-        await client.authenticate(tag_slug=tag_slug, password=password)
+        await client.authenticate(fq_tag=fq_tag, password=password)
         return client
 
     async def authenticate(self, **creds):
         """ Creds should be an object of these supported forms..
             1. Password auth:
-                 tag_slug: "@foo:bar",
+                 fq_tag: "@foo:bar",
                  password: "secret"
             2. SMS auth:
                  authtoken: "123456",

@@ -66,7 +66,7 @@ async def registerDevice(atlasClient=None, name=defaultName,
     if atlasClient is None:
         atlasClient = AtlasClient.factory()
     accountInfo = await atlasClient.fetch('/v1/provision/account')
-    if not accountInfo.devices:
+    if not accountInfo['devices']:
         logger.error("Must use `registerAccount` for first device")
         raise TypeError("No Account")
     signalClient = SignalClient(url=accountInfo.serverUrl)

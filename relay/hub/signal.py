@@ -3,6 +3,7 @@ import asyncio
 import logging
 import re
 import yarl
+from . import http
 from .. import protobufs, storage, errors
 from ..provisioning_cipher import ProvisioningCipher
 from axolotl.ecc.curve import Curve
@@ -37,7 +38,7 @@ def b64decode(data):
     return _b64decode(data)
 
 
-class SignalClient(object):
+class SignalClient(http.HttpClient):
 
     attachment_id_regex = re.compile("^https://.*/(\\d+)?")
 
@@ -111,7 +112,11 @@ class SignalClient(object):
         store.putState('signedKeyId', signedKeyId + 1)
         return result
 
-    def authHeader(self, username, password):
+    def authHeader(self, username=None, password=None):
+        if username is None:
+            username = self.username
+        if password is None:
+            password = self.password
         return 'Basic ' + b64encode(f'{username}:{password}'.encode()).decode()
 
     async def request(self, call=None, urn='', method='GET',
@@ -119,32 +124,23 @@ class SignalClient(object):
         path = SIGNAL_URL_CALLS.get(call) + urn
         headers = {}
         if username and password:
+            # Trump the internal arg-less authHeader() call made inside fetch()
             headers['Authorization'] = self.authHeader(username, password)
         return await self.fetch(path, method=method, json=json, headers=headers)
 
-    async def fetch(self, urn, method='GET', headers=None, json=None):
-        """ Thin wrapper to augment json and auth support. """
-        if headers is None:
-            headers = {}
-        if 'Authorization' not in headers and self.username and self.password:
-            headers['Authorization'] = self.authHeader(self.username,
-                                                       self.password)
-        logger.debug(f"Signal Request: {urn} {method} {json}")
-        req = self._httpClient.request(url=f'{self.url}/{urn.lstrip("/")}',
-                                       headers=headers, method=method,
-                                       json=json)
-        async with req as resp:
-            is_json = resp.content_type.startswith('application/json')
-            result = await resp.json() if is_json else await resp.text()
-            logger.debug(f"Signal Response: {urn} {method}: [{resp.status}] {result}")
+    async def fetchRequest(self, *args, **kwargs):
+        """ Convert certain http request errors into librelay exceptions. """
+        async with super().fetchRequest(*args, **kwargs) as resp:
             if resp.status < 200 or resp.status >= 400:
-                e = errors.ProtocolError(resp.status, result)
+                is_json = resp.content_type.startswith('application/json')
+                data = await resp.json() if is_json else await resp.text()
+                e = errors.ProtocolError(resp.status, data)
                 if e.code in SIGNAL_HTTP_MESSAGES:
                     e.message = SIGNAL_HTTP_MESSAGES[e.code]
                 else:
-                    e.message = f'Status code: {e.code}'
+                    e.message = f'Status code: {e.status}'
                 raise e
-            return result
+            return resp
 
     async def getDevices(self):
         data = await self.request(call='devices')

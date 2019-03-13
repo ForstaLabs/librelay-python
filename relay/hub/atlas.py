@@ -9,8 +9,8 @@ import json
 import logging
 import re
 import time
+from . import http
 from .. import storage
-from .. import util
 
 store = storage.getStore()
 logger = logging.getLogger(__name__)
@@ -39,33 +39,57 @@ def decode_jwt(encoded_token):
     return token
 
 
-class AtlasClient(object):
+class AtlasClient(http.HttpClient):
 
     def __init__(self, url=None, jwt=None):
-        self.url = url or DEFAULT_ATLAS_URL
         self.setJWT(jwt)
-        self._httpClient = aiohttp.ClientSession(read_timeout=30)
-
-    def __del__(self):
-        asyncio.get_event_loop().create_task(self._httpClient.close())
-        self._httpClient = None
+        self._authHeader = None
+        super().__init__(url=url or DEFAULT_ATLAS_URL)
 
     def setJWT(self, jwt):
         if jwt is not None:
             jwtDict = decode_jwt(jwt)
             self.userId = jwtDict['payload']['user_id']
             self.orgId = jwtDict['payload']['org_id']
-            self.authHeader = 'JWT ' + jwt
+            self._authHeader = 'JWT ' + jwt
         else:
             self.userId = None
             self.orgId = None
-            self.authHeader = None
+            self._authHeader = None
+
+    def authHeader(self):
+        return self._authHeader
 
     @classmethod
     def factory(cls):
         url = store.getState(url_store_key)
         jwt = store.getState(cred_store_key)
         return cls(url=url, jwt=jwt)
+
+    @classmethod
+    async def requestAuthentication(cls, userTag, **options):
+        client = cls(**options)
+        user, org = client.parseTag(userTag)
+        async with client.fetchRequest(f'/v1/login/send/{org}/{user}/') as resp:
+            data = await resp.json()
+            if resp.status == 409:
+                if 'totp auth required' in data['non_field_errors']:
+                    auth_type = 'totp'
+
+                    async def validator(password, otp):
+                        return await cls.authenticateViaPasswordOtp(userTag,
+                            password, otp, **options)
+                else:
+                    auth_type = 'password'
+
+                    async def validator(password):
+                        return await cls.authenticateViaPassword(userTag, password, **options)
+            else:
+                auth_type = 'sms'
+
+                async def validator(code):
+                    return await cls.authenticateViaCode(userTag, code, **options)
+            return auth_type, validator
 
     @classmethod
     async def requestAuthenticationCode(cls, userTag, **options):
@@ -93,19 +117,29 @@ class AtlasClient(object):
         await client.authenticate(fq_tag=fq_tag, password=password)
         return client
 
+    @classmethod
+    async def authenticateViaPasswordOtp(cls, fq_tag, password, otp, **options):
+        client = cls(**options)
+        await client.authenticate(fq_tag=fq_tag, password=password, otp=otp)
+        return client
+
     async def authenticate(self, **creds):
         """ Creds should be an object of these supported forms..
             1. Password auth:
                  fq_tag: "@foo:bar",
                  password: "secret"
+            1.5 Password+TOTP auth:
+                 fq_tag: "@foo:bar",
+                 password: "secret"
+                 otp: "code"
             2. SMS auth:
                  authtoken: "123456",
             3. Token auth:
                  userauthtoken: "APITOKEN",
         """
         auth = await self.fetch('/v1/login/', method='POST', json=creds)
-        self.setJWT(auth.token)
-        store.putState(cred_store_key, auth.token)
+        self.setJWT(auth['token'])
+        store.putState(cred_store_key, auth['token'])
         store.putState(url_store_key, self.url)
 
     def parseTag(self, tag):
@@ -113,18 +147,6 @@ class AtlasClient(object):
         if not org:
             org = ['forsta']
         return user, org[0]
-
-    async def fetch(self, urn, method='GET', json=None):
-        headers = self.authHeader and {'Authorization': self.authHeader}
-        url = f'{self.url}/{urn.lstrip("/")}'
-        logger.debug(f"Atlas Request: {urn} {method} {json}")
-        async with self._httpClient.request(url=url, method=method, json=json,
-                                            headers=headers) as resp:
-            is_json = resp.content_type.startswith('application/json')
-            result = await resp.json() if is_json else await resp.text()
-            logger.debug(f"Atlas Response: {urn} {method}: [{resp.status}] {result}")
-            resp.raise_for_status()
-            return result
 
     async def maintainJWT(self, forceRefresh=False, authenticator=None,
                           onRefresh=None):
@@ -203,9 +225,8 @@ class AtlasClient(object):
     async def getDevices(self):
         try:
             return (await self.fetch('/v1/provision/account'))['devices']
-        except util.RequestError as e:
-            # XXX
-            if e.code == 404:
+        except aiohttp.ClientResponseError as e:
+            if e.status == 404:
                 return []
             else:
                 raise e

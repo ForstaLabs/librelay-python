@@ -16,17 +16,18 @@ class HttpClient(object):
         asyncio.get_event_loop().create_task(self.httpSession.close())
         self.httpSession = None
 
-    async def fetch(self, *args, **kwargs):
+    async def fetch(self, urn, method='GET', **kwargs):
         """ Thin wrapper to augment json and auth support. """
-        async with self.fetchRequest(*args, **kwargs) as resp:
+        async with self.fetchRequest(urn, method=method, **kwargs) as resp:
             is_json = resp.content_type.startswith('application/json')
             data = await resp.json() if is_json else await resp.text()
-            logger.debug(f"Response: {urn} {method}: [{resp.status}] {data}")
+            url = f'{self.url}/{urn.lstrip("/")}'
+            logger.debug(f"Fetch {method} response {url}: [{resp.status}] -> {data}")
             resp.raise_for_status()
             return data
 
-    async def fetchRequest(self, urn, method='GET', headers=None, json=None,
-                           **request_options):
+    def fetchRequest(self, urn, method='GET', headers=None, json=None,
+                     **request_options):
         if headers is None:
             headers = {}
         if 'Authorization' not in headers:
@@ -34,7 +35,7 @@ class HttpClient(object):
             if auth:
                 headers['Authorization'] = auth
         url = f'{self.url}/{urn.lstrip("/")}'
-        logger.debug(f"Fetch {method} {url} <- {json}")
+        logger.debug(f"Fetch {method} request {url} {headers}")
         return self.httpSession.request(url=url, headers=headers, method=method,
                                         json=json, **request_options)
 

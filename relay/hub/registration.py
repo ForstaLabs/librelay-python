@@ -1,21 +1,22 @@
+import asyncio
 import base64
 import logging
 import secrets
 
+from .. import protobufs
 from .. import storage
 from ..provisioning_cipher import ProvisioningCipher
-#from ..websocket_resource import WebSocketResource
+from ..websocket_resource import WebSocketResource
 from .atlas import AtlasClient
 from .signal import SignalClient
+from axolotl.identitykey import IdentityKey
+from axolotl.identitykeypair import IdentityKeyPair
 from axolotl.util.keyhelper import KeyHelper
+
 
 store = storage.getStore()
 logger = logging.getLogger(__name__)
 defaultName = 'librelay'
-
-
-class ReturnInterface(object):
-    pass
 
 
 def generatePassword():
@@ -69,81 +70,73 @@ async def registerDevice(atlasClient=None, name=defaultName,
     if not accountInfo['devices']:
         logger.error("Must use `registerAccount` for first device")
         raise TypeError("No Account")
-    signalClient = SignalClient(url=accountInfo.serverUrl)
-    if not onProvisionReady and autoProvision:
+    signalClient = SignalClient(url=accountInfo['serverUrl'])
+    if not onProvisionReady and not autoProvision:
         raise TypeError("Missing: onProvisionReady callback")
-    returnInterface = ReturnInterface()
-    returnInterface.waiting = True
+    returnInterface = {"waiting": True}
     provisioningCipher = ProvisioningCipher()
-    pubkey = provisioningCipher.getPublicKey().toString('base64')
-    raise Exception('XXX not ported yet')
-    '''webSocketWaiter = Promise((resolve, reject) => {
-        wsr = WebSocketResource(signalClient.getProvisioningWebSocketURL(), {
-            keepalive: {path: '/v1/keepalive/provisioning'},
-            handleRequest: request => {
-                if (request.path == "/v1/address" and request.verb == "PUT") {
-                    proto = protobufs.ProvisioningUuid.decode(request.body)
-                    request.respond(200, 'OK')
-                    if (autoProvision) {
-                        atlasClient.fetch('/v1/provision/request', {
-                            method: 'POST',
-                            json: {
-                                uuid: proto.uuid,
-                                key: pubkey
-                            }
-                        }).catch(reject)
-                    }
-                    if (options.onProvisionReady) {
-                        r = options.onProvisionReady(proto.uuid, pubkey)
-                        if (r instanceof Promise) {
-                            r.catch(reject)
-                        }
-                    }
-                } else if (request.path == "/v1/message" and request.verb == "PUT") {
-                    msgEnvelope = protobufs.ProvisionEnvelope.decode(request.body)
-                    request.respond(200, 'OK')
-                    wsr.close()
-                    resolve(msgEnvelope)
-                } else {
-                    reject(Exception('Unknown websocket message ' + request.path))
-                }
-            }
-        })
-    })
+    pubkey = base64.b64encode(provisioningCipher.getPublicKey().getPublicKey())
+    webSocketWaiter = asyncio.Future()
+
+    async def handleRequest(request):
+        if request.path == "/v1/address" and request.verb == "PUT":
+            proto = protobufs.ProvisioningUuid()
+            proto.ParseFromString(request.body)
+            await request.respond(200, 'OK')
+            if autoProvision:
+                await atlasClient.fetch('/v1/provision/request', method='POST', json={
+                    "uuid": proto.uuid,
+                    "key": pubkey.decode()
+                })
+            if onProvisionReady:
+                raise NotImplementedError("Not ported")
+                #r = onProvisionReady(proto.uuid, pubkey)
+                #if (r instanceof Promise) {
+                #    r.catch(reject)
+                #}
+        elif request.path == "/v1/message" and request.verb == "PUT":
+            msgEnvelope = protobufs.ProvisionEnvelope()
+            msgEnvelope.ParseFromString(request.body)
+            await request.respond(200, 'OK')
+            await wsr.close()
+            webSocketWaiter.set_result(msgEnvelope)
+        else:
+            raise Exception('Unknown websocket message ' + request.path)
+    wsr = WebSocketResource(signalClient.getProvisioningWebSocketUrl(), handleRequest)
     await wsr.connect()
-    '''
 
     async def _done():
         pmsg = await provisioningCipher.decrypt(await webSocketWaiter)
-        returnInterface.waiting = False
-        addr = pmsg.addr
-        identity = pmsg.identityKeyPair
-        if pmsg.addr != accountInfo.userId:
+        returnInterface['waiting'] = False
+        addr = pmsg['addr']
+        identity = IdentityKeyPair(IdentityKey(pmsg['identityKeyPair'].getPublicKey()),
+                                   pmsg['identityKeyPair'].getPrivateKey())
+        if pmsg['addr'] != accountInfo['userId']:
             raise Exception('Security Violation: Foreign account sent us an identity key!')
         # Workaround axolotl bug that generates unsigned ints.
         registrationId = KeyHelper.generateRegistrationId() & 0x7fffffff
         password = generatePassword()
         signalingKey = generateSignalingKey()
         json = {
-            "signalingKey": signalingKey.toString('base64'),
+            "signalingKey": base64.b64encode(signalingKey).decode(),
             "supportsSms": False,
             "fetchesMessages": True,
             "registrationId": registrationId,
             "name": name
         }
-        response = await signalClient.request(call='devices', httpType='PUT',
-                                              urn='/' + pmsg.provisioningCode,
+        response = await signalClient.request(call='devices', method='PUT',
+                                              urn='/' + pmsg['provisioningCode'],
                                               username=addr, password=password,
                                               json=json)
-        username = f'{addr}.{response.deviceId}'
+        username = f'{addr}.{response["deviceId"]}'
         store.clearSessionStore()
         store.removeOurIdentity()
         store.removeIdentity(addr)
-        store.saveIdentity(addr, identity.publicKey)
+        store.saveIdentity(addr, identity.getPublicKey())
         store.saveOurIdentity(identity)
         store.putState('addr', addr)
         store.putState('serverUrl', signalClient.url)
-        store.putState('deviceId', response.deviceId)
+        store.putState('deviceId', response['deviceId'])
         store.putState('name', name)
         store.putState('username', username)
         store.putState('password', password)
@@ -151,14 +144,14 @@ async def registerDevice(atlasClient=None, name=defaultName,
         store.putState('signalingKey', signalingKey)
         authedClient = SignalClient(username, password, signalClient.url)
         await authedClient.registerKeys(await authedClient.generateKeys())
-    done = _done()
+    returnInterface['done'] = asyncio.get_event_loop().create_task(_done())
 
     async def cancel():
-        wsr.close()
+        await wsr.close()
         try:
             await webSocketWaiter
         except Exception as e:
             logger.warn("Ignoring web socket error: " + e)
-    returnInterface.cancel = cancel
+    returnInterface['cancel'] = cancel
 
     return returnInterface

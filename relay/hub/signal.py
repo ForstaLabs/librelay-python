@@ -42,15 +42,11 @@ class SignalClient(http.HttpClient):
 
     attachment_id_regex = re.compile("^https://.*/(\\d+)?")
 
-    def __init__(self, username, password, url):
-        self.url = url
+    def __init__(self, username=None, password=None, url=None):
         self.username = username
         self.password = password
-        self._httpClient = aiohttp.ClientSession(read_timeout=30)
-
-    def __del__(self):
-        asyncio.get_event_loop().create_task(self._httpClient.close())
-        self._httpClient = None
+        self.url = url
+        super().__init__(url=url)
 
     @classmethod
     def factory(cls):
@@ -128,19 +124,22 @@ class SignalClient(http.HttpClient):
             headers['Authorization'] = self.authHeader(username, password)
         return await self.fetch(path, method=method, json=json, headers=headers)
 
-    async def fetchRequest(self, *args, **kwargs):
-        """ Convert certain http request errors into librelay exceptions. """
-        async with super().fetchRequest(*args, **kwargs) as resp:
+    async def fetch(self, urn, method='GET', **kwargs):
+        """ Thin wrapper to augment json and auth support. """
+        async with self.fetchRequest(urn, method=method, **kwargs) as resp:
+            is_json = resp.content_type.startswith('application/json')
+            data = await resp.json() if is_json else await resp.text()
+            url = f'{self.url}/{urn.lstrip("/")}'
+            logger.debug(f"Fetch {method} response {url}: [{resp.status}] -> {data}")
+            resp.raise_for_status()
             if resp.status < 200 or resp.status >= 400:
-                is_json = resp.content_type.startswith('application/json')
-                data = await resp.json() if is_json else await resp.text()
                 e = errors.ProtocolError(resp.status, data)
                 if e.code in SIGNAL_HTTP_MESSAGES:
                     e.message = SIGNAL_HTTP_MESSAGES[e.code]
                 else:
                     e.message = f'Status code: {e.status}'
                 raise e
-            return resp
+            return data
 
     async def getDevices(self):
         data = await self.request(call='devices')

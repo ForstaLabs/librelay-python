@@ -2,19 +2,22 @@
 Device onboarding protocol
 """
 
+from . import crypto
 from . import protobufs
 from axolotl.ecc.curve import Curve
 from axolotl.ecc.eckeypair import ECKeyPair
 from axolotl.ecc.djbec import DjbECPublicKey, DjbECPrivateKey
 from axolotl.kdf.hkdf import HKDF
-from axolotl.protocol.whispermessage import WhisperMessage
 from axolotl.sessioncipher import AESCipher
 
 
 class ProvisioningCipher(object):
 
+    def __init__(self):
+        self.keyPair = None
+
     async def decrypt(self, provisionEnvelope):
-        masterEphemeral = provisionEnvelope.publicKey
+        masterEphemeral = Curve.decodePoint(provisionEnvelope.publicKey)
         message = provisionEnvelope.body
         if message[0] != 1:
             raise ValueError("Bad version number on ProvisioningMessage")
@@ -22,12 +25,13 @@ class ProvisioningCipher(object):
         mac = message[-32:]
         ivAndCiphertext = message[:-32]
         ciphertext = message[16 + 1:-32]
-        ecRes = Curve.calculateAgreement(masterEphemeral, self.keypair.privateKey)
-        keys = HKDF.createFor(3).deriveSecrets(ecRes, "TextSecure Provisioning Message", 64)
-        wm = WhisperMessage()
-        wm.verifyMAC(1, ivAndCiphertext, keys[1], mac)
-        plaintext = AESCipher(keys[0], iv).decrypt(ciphertext)
-        provisionMessage = protobufs.ProvisionMessage.decode(plaintext)
+        ecRes = Curve.calculateAgreement(masterEphemeral, self.keyPair.privateKey)
+        data = HKDF.createFor(3).deriveSecrets(ecRes, b"TextSecure Provisioning Message", 64)
+        keyOne, keyTwo = data[:32], data[32:]
+        crypto.verifyMAC(ivAndCiphertext, keyTwo, mac)
+        plaintext = AESCipher(keyOne, iv).decrypt(ciphertext)
+        provisionMessage = protobufs.ProvisionMessage()
+        provisionMessage.ParseFromString(plaintext)
         privateKey = provisionMessage.identityKeyPrivate
         publicKey = Curve.generatePublicKey(privateKey)
         return {
@@ -64,7 +68,7 @@ class ProvisioningCipher(object):
         return pEnvelope
         '''
 
-    def get_publickey(self):
-        if not self.keypair:
-            self.keypair = Curve.generateKeyPair()
-        return self.keypair.publicKey
+    def getPublicKey(self):
+        if not self.keyPair:
+            self.keyPair = Curve.generateKeyPair()
+        return self.keyPair.publicKey

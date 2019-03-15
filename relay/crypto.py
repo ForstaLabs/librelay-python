@@ -1,6 +1,5 @@
 import hashlib
 import hmac
-from axolotl.protocol.whispermessage import WhisperMessage
 from axolotl.sessioncipher import AESCipher
 
 
@@ -13,7 +12,8 @@ def sign(key, data):
 def verifyMAC(data, key, mac):
     calculated_mac = sign(key, data)
     length = len(mac)
-    return mac == calculated_mac[:length]
+    if mac != calculated_mac[:length]:
+        raise Exception("Bad MAC")
 
 
 def decryptWebSocketMessage(message, signaling_key):

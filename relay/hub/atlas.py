@@ -43,7 +43,6 @@ class AtlasClient(http.HttpClient):
 
     def __init__(self, url=None, jwt=None):
         self.setJWT(jwt)
-        self._authHeader = None
         super().__init__(url=url or DEFAULT_ATLAS_URL)
 
     def setJWT(self, jwt):

@@ -4,6 +4,7 @@ import logging
 from . import crypto
 from . import errors
 from . import eventing
+from . import exchange
 from . import hub
 from . import protobufs
 from . import storage
@@ -12,6 +13,7 @@ from axolotl.duplicatemessagexception import DuplicateMessageException
 from axolotl.protocol.prekeywhispermessage import PreKeyWhisperMessage
 from axolotl.protocol.whispermessage import WhisperMessage
 from axolotl.sessioncipher import SessionCipher
+from axolotl.untrustedidentityexception import UntrustedIdentityException
 
 
 store = storage.getStore()
@@ -191,29 +193,30 @@ class MessageReceiver(eventing.EventTarget):
 
     def decrypt(self, envelope, ciphertext):
         stores = [store] * 4
-        sessionCipher = SessionCipher(*stores, envelope.source, envelope.sourceDevice)
+        sessionCipher = SessionCipher(*stores, envelope.source,
+                                      envelope.sourceDevice)
         if envelope.type == envelope.CIPHERTEXT:
             msg = WhisperMessage(serialized=ciphertext)
-            return self.unpad(sessionCipher.decryptMsg(msg))
+            plainBuf = sessionCipher.decryptMsg(msg)
         elif envelope.type == envelope.PREKEY_BUNDLE:
-            try:
-                msg = PreKeyWhisperMessage(serialized=ciphertext)
-                return self.unpad(sessionCipher.decryptPkmsg(msg))
-            except Exception as exc:
-                logger.exception("DERP")
-                import pdb;pdb.set_trace()
-                # XXX port
-                print(2222, exc)
-                print(2222, exc)
-                if exc.message == 'Unknown identity key':
-                    raise errors.IncomingIdentityKeyError(address, ciphertext,
-                                                          e.identitykey)
-                raise e
-        raise Exception("Unknown message type")
+            msg = PreKeyWhisperMessage(serialized=ciphertext)
+            plainBuf = self.unpad(sessionCipher.decryptPkmsg(msg))
+        else:
+            raise TypeError("Unknown message type")
+        return self.unpad(plainBuf)
 
     async def handleSentMessage(self, sent, envelope):
         if sent.message.flags & sent.message.END_SESSION:
-            await self.handleEndSession(sent.destination)
+            logger.error("Unsupported syncMessage end-session sent by device:",
+                         envelope.sourceDevice)
+            return
+        ex = exchange.decode(sent.message, {
+            messageSender: this._sender,
+            messageReceiver: this,
+            atlas: this.atlas,
+            signal: this.signal
+        });
+
         ev = eventing.Event('sent')
         ev.data = {
             "source": envelope.source,

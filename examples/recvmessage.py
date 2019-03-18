@@ -1,5 +1,7 @@
 import asyncio
 import relay
+import logging
+logging.basicConfig(level=0)
 
 async def onMessage(ev):
     print("Got message", ev.data)
@@ -20,4 +22,5 @@ async def main():
     await msgReceiver.connect()
     await msgReceiver.closed()
 
+asyncio.get_event_loop().set_debug(True)
 asyncio.get_event_loop().run_until_complete(main())

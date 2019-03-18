@@ -1,4 +1,5 @@
 
+import inspect
 import logging
 from . import storage
 
@@ -38,7 +39,9 @@ class EventTarget(object):
             return
         for callback in self._listeners[ev.name]:
             try:
-                await callback(ev)
+                r = callback(ev)
+                if inspect.isawaitable(r):
+                    await r
             except Exception:
                 logger.exception(f'Event Listener Exception [{ev.name}]:')
 

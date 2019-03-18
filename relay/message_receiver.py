@@ -40,8 +40,7 @@ class MessageReceiver(eventing.EventTarget):
         if not no_web_socket:
             url = self.signal.getMessageWebSocketUrl()
             self.wsr = WebSocketResource(url, handleRequest=self.handleRequest,
-                                         keepalive_path='/v1/keepalive',
-                                         keepalive_disconnect=True)
+                                         keepalive_path='/v1/keepalive')
             self.wsr.addEventListener('close', self.onSocketClose)
             self.wsr.addEventListener('error', self.onSocketError)
 
@@ -68,7 +67,7 @@ class MessageReceiver(eventing.EventTarget):
         if self._closing:
             raise RuntimeError("Invalid State: Already Closed")
         if self._connecting:
-            logger.warning("Duplicate connect detected")
+            logger.warn("Duplicate connect detected")
         else:
             async def _connect():
                 attempts = 0
@@ -81,17 +80,17 @@ class MessageReceiver(eventing.EventTarget):
                     except Exception as e:
                         await self.checkRegistration()
                         logger.exception('CONNECT ERROR')  # XXX 
-                        logger.warning(f'Connect problem ({attempts} attempts)')
+                        logger.warn(f'Connect problem ({attempts} attempts)')
                     attempts += 1
             self._connecting = _connect()
         await self._connecting
         self._connecting = None
 
     async def close(self):
+        self._closing = True
+        wsr = self.wsr
+        self.wsr = None
         try:
-            self._closing = True
-            wsr = self.wsr
-            self.wsr = None
             await wsr.close()
         finally:
             self._closed.set_result(None)
@@ -121,13 +120,12 @@ class MessageReceiver(eventing.EventTarget):
             await asyncio.gather(deleting)
 
     def onSocketError(self, ev):
-        logger.warning('Message Receiver WebSocket error: %s' % (ev,))
+        logger.warn('Message Receiver WebSocket error: %s' % (ev,))
 
     async def onSocketClose(self, ev):
         if self._closing:
             return
-        import pdb;pdb.set_trace()
-        logger.warning('Websocket closed:', ev.msg.code, ev.msg.reason or '')
+        logger.warn('Websocket closed: %d %s' % (ev.code, ev.reason))
         await self.checkRegistration()
         if not self._closing:
             await self.connect()
@@ -171,7 +169,7 @@ class MessageReceiver(eventing.EventTarget):
         try:
             await handler(envelope, keychange)
         except DuplicateMessageException:
-            logger.warning("Ignoring duplicate message for: %s" % (envelope,))
+            logger.warn("Ignoring duplicate message for: %s" % (envelope,))
             return
         except UntrustedIdentityException as e:
             if keychange:
@@ -182,7 +180,7 @@ class MessageReceiver(eventing.EventTarget):
             if keyChangeEvent.accepted:
                 return await self.handleEnvelope(envelope, keychange=True)
         except errors.RelayError as e:
-            logger.warning("Supressing RelayError: %s" % (e,))
+            logger.warn("Supressing RelayError: %s" % (e,))
         except Exception as e:
             ev = eventing.Event('error')
             ev.error = e
@@ -328,5 +326,5 @@ class MessageReceiver(eventing.EventTarget):
         for device_id in device_ids:
             stores = [store] * 4
             sessionCipher = SessionCipher(*stores, addr, device_id)
-            logger.warning('Closing session for: %s %s' % (addr, device_id))
+            logger.warn('Closing session for: %s %d' % (addr, device_id))
             sessionCipher.closeOpenSessionForDevice()

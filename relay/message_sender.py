@@ -33,7 +33,6 @@ class Message(object):
 
     def toProto(self):
         content = protobufs.Content()
-        #dataMessage = protobufs.DataMessage()
         dataMessage = content.dataMessage
         if getattr(self, 'body', None):
             dataMessage.body = json.dumps(self.body)
@@ -43,8 +42,6 @@ class Message(object):
             dataMessage.flags = self.flags
         if getattr(self, 'expiration', None):
             dataMessage.expireTimer = self.expiration
-        #content = protobufs.Content()
-        #content.dataMessage = dataMessage
         return content
 
 

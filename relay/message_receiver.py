@@ -6,6 +6,7 @@ from . import errors
 from . import eventing
 from . import exchange
 from . import hub
+from . import message_sender
 from . import protobufs
 from . import storage
 from .websocket_resource import WebSocketResource
@@ -22,25 +23,36 @@ logger = logging.getLogger(__name__)
 
 class MessageReceiver(eventing.EventTarget):
 
-    def __init__(self, signal, addr, device_id, signaling_key, no_web_socket=False):
+    def __init__(self, signal, atlas, addr, device_id, signaling_key, no_web_socket=False):
+        assert isinstance(signal, hub.SignalClient)
+        assert isinstance(atlas, hub.AtlasClient)
+        assert isinstance(addr, str)
+        assert isinstance(device_id, int)
         self._closing = False
         self._closed = asyncio.Future()
         self._connecting = None
+        self._sender = message_sender.MessageSender(addr, signal, atlas)
         self.signal = signal
+        self.atlas = atlas
         self.addr = addr
         self.device_id = device_id
         self.signaling_key = signaling_key
         if not no_web_socket:
             url = self.signal.getMessageWebSocketUrl()
-            self.wsr = WebSocketResource(url, handleRequest=self.handleRequest)
+            self.wsr = WebSocketResource(url, handleRequest=self.handleRequest,
+                                         keepalive_path='/v1/keepalive',
+                                         keepalive_disconnect=True)
+            self.wsr.addEventListener('close', self.onSocketClose)
+            self.wsr.addEventListener('error', self.onSocketError)
 
     @classmethod
     def factory(cls, no_web_socket=False):
         signal = hub.SignalClient.factory()
+        atlas = hub.AtlasClient.factory()
         addr = store.getState('addr')
         device_id = store.getState('deviceId')
         signaling_key = store.getState('signalingKey')
-        return cls(signal, addr, device_id, signaling_key, no_web_socket)
+        return cls(signal, atlas, addr, device_id, signaling_key, no_web_socket)
 
     async def checkRegistration(self):
         try:
@@ -109,14 +121,13 @@ class MessageReceiver(eventing.EventTarget):
             await asyncio.gather(deleting)
 
     def onSocketError(self, ev):
-        # XXX wire in without callback
-        logger.warning('Message Receiver WebSocket error:', ev)
+        logger.warning('Message Receiver WebSocket error: %s' % (ev,))
 
     async def onSocketClose(self, ev):
-        # XXX wire in without callback
         if self._closing:
             return
-        logger.warning('Websocket closed:', ev.code, ev.reason or '')
+        import pdb;pdb.set_trace()
+        logger.warning('Websocket closed:', ev.msg.code, ev.msg.reason or '')
         await self.checkRegistration()
         if not self._closing:
             await self.connect()
@@ -127,7 +138,7 @@ class MessageReceiver(eventing.EventTarget):
             await request.respond(200, 'OK')
             return
         elif request.path != '/api/v1/message' or request.verb != 'PUT':
-            logger.error("Expected PUT /message instead of:", request)
+            logger.error("Expected PUT /message instead of: %s" % request)
             await request.respond(400, 'Invalid Resource')
             raise Exception('Invalid WebSocket resource received')
         envelope = None
@@ -147,28 +158,29 @@ class MessageReceiver(eventing.EventTarget):
         finally:
             await request.respond(200, 'OK')
 
-    async def handleEnvelope(self, envelope, reentrant=True):
+    async def handleEnvelope(self, envelope, keychange=False):
         handler = None
         if envelope.type == envelope.RECEIPT:
             handler = self.handleDeliveryReceipt
-        elif envelope.content:
+        elif envelope.HasField('content'):
             handler = self.handleContentMessage
-        elif envelope.legacyMessage:
+        elif envelope.HasField('legacyMessage'):
             handler = self.handleLegacyMessage
         else:
             raise Exception('Received message with no content and no legacyMessage')
         try:
-            await handler(envelope)
+            await handler(envelope, keychange)
         except DuplicateMessageException:
             logger.warning("Ignoring duplicate message for: %s" % (envelope,))
             return
-        except errors.IncomingIdentityKeyError as e:
-            if reentrant:
+        except UntrustedIdentityException as e:
+            if keychange:
+                logger.exception("Multiple identity exceptions for a single message")
                 raise
-            await self.dispatchEvent(eventing.KeyChangeEvent(e))
-            if e.accepted:
-                envelope.keyChange = True
-                return await self.handleEnvelope(envelope, reentrant=True)
+            keyChangeEvent = eventing.KeyChangeEvent(e)
+            await self.dispatchEvent(keyChangeEvent)
+            if keyChangeEvent.accepted:
+                return await self.handleEnvelope(envelope, keychange=True)
         except errors.RelayError as e:
             logger.warning("Supressing RelayError: %s" % (e,))
         except Exception as e:
@@ -177,8 +189,9 @@ class MessageReceiver(eventing.EventTarget):
             ev.proto = envelope
             await self.dispatchEvent(ev)
             raise
+        # XXX Port SessionError handling for closesession
 
-    async def handleDeliveryReceipt(self, envelope):
+    async def handleDeliveryReceipt(self, envelope, keychange):
         ev = eventing.Event('receipt')
         ev.proto = envelope
         await self.dispatchEvent(ev)
@@ -200,81 +213,92 @@ class MessageReceiver(eventing.EventTarget):
             plainBuf = sessionCipher.decryptMsg(msg)
         elif envelope.type == envelope.PREKEY_BUNDLE:
             msg = PreKeyWhisperMessage(serialized=ciphertext)
-            plainBuf = self.unpad(sessionCipher.decryptPkmsg(msg))
+            plainBuf = sessionCipher.decryptPkmsg(msg)
         else:
             raise TypeError("Unknown message type")
         return self.unpad(plainBuf)
 
     async def handleSentMessage(self, sent, envelope):
         if sent.message.flags & sent.message.END_SESSION:
-            logger.error("Unsupported syncMessage end-session sent by device:",
-                         envelope.sourceDevice)
+            logger.error("Unsupported syncMessage end-session sent by "
+                         "device: %d", envelope.sourceDevice)
             return
-        ex = exchange.decode(sent.message, {
-            messageSender: this._sender,
-            messageReceiver: this,
-            atlas: this.atlas,
-            signal: this.signal
-        });
-
+        ex = exchange.decode(sent.message, messageSender=self._sender,
+                             messageReceiver=self, atlas=self.atlas,
+                             signal=self.signal)
+        ex.setSource(envelope.source);
+        ex.setSourceDevice(envelope.sourceDevice);
+        ex.setTimestamp(sent.timestamp);
+        ex.setAge(envelope.age);
         ev = eventing.Event('sent')
         ev.data = {
             "source": envelope.source,
             "sourceDevice": envelope.sourceDevice,
             "timestamp": sent.timestamp,
             "destination": sent.destination,
-            "message": sent.message
+            "message": sent.message,
+            "exchange": ex,
+            "age": envelope.age
         }
         if sent.expirationStartTimestamp:
           ev.data.expirationStartTimestamp = sent.expirationStartTimestamp
         await self.dispatchEvent(ev)
 
-    async def handleDataMessage(self, message, envelope, content):
+    async def handleDataMessage(self, message, envelope, keychange):
         if message.flags & message.END_SESSION:
             await self.handleEndSession(envelope.source)
+        ex = exchange.decode(message, messageSender=self._sender,
+                             messageReceiver=self, atlas=self.atlas,
+                             signal=self.signal)
+        ex.setSource(envelope.source);
+        ex.setSourceDevice(envelope.sourceDevice);
+        ex.setTimestamp(envelope.timestamp);
+        ex.setAge(envelope.age);
         ev = eventing.Event('message')
         ev.data = {
             "timestamp": envelope.timestamp,
             "source": envelope.source,
             "sourceDevice": envelope.sourceDevice,
             "message": message,
-            "keyChange": getattr(envelope, 'keyChange', None)
+            "keyChange": keychange,
+            "age": envelope.age
         }
         await self.dispatchEvent(ev)
 
-    async def handleLegacyMessage(self, envelope):
+    async def handleLegacyMessage(self, envelope, keychange):
         data = self.decrypt(envelope, envelope.legacyMessage)
         message = protobufs.DataMessage()
         message.ParseFromString(data)
-        await self.handleDataMessage(message, envelope)
+        await self.handleDataMessage(message, envelope, keychange)
 
-    async def handleContentMessage(self, envelope):
+    async def handleContentMessage(self, envelope, keychange):
         data = self.decrypt(envelope, envelope.content)
         content = protobufs.Content()
         content.ParseFromString(data)
         if content.HasField('syncMessage'):
-            await self.handleSyncMessage(content.syncMessage, envelope, content)
+            await self.handleSyncMessage(content.syncMessage, envelope)
         elif content.HasField('dataMessage'):
-            await self.handleDataMessage(content.dataMessage, envelope, content)
+            await self.handleDataMessage(content.dataMessage, envelope,
+                                         keychange)
         else:
             raise TypeError('Got content message with no dataMessage or syncMessage')
 
-    async def handleSyncMessage(self, message, envelope, content):
+    async def handleSyncMessage(self, message, envelope):
         if envelope.source != self.addr:
             raise ReferenceError('Received sync message from another addr')
         if envelope.sourceDevice == self.device_id:
             raise ReferenceError('Received sync message from our own device')
-        if message.sent:
+        if message.HasField('sent'):
             await self.handleSentMessage(message.sent, envelope)
         elif message.read:
             await self.handleRead(message.read, envelope)
-        elif message.contacts:
+        elif message.HasField('contacts'):
             raise TypeError('Deprecated contact sync message')
-        elif message.groups:
+        elif message.HasField('groups'):
             raise TypeError('Deprecated group sync message')
-        elif message.blocked:
+        elif message.HasField('blocked'):
             self.handleBlocked(message.blocked, envelope)
-        elif message.request:
+        elif message.HasField('request'):
             raise TypeError('Deprecated group request sync message')
         else:
             raise TypeError('Empty SyncMessage')
@@ -301,9 +325,8 @@ class MessageReceiver(eventing.EventTarget):
 
     async def handleEndSession(self, addr):
         device_ids = store.getDeviceIds(addr)
-        jobs = []
         for device_id in device_ids:
-            address = libsignal.SignalProtocolAddress(addr, device_id)
-            sessionCipher = libsignal.SessionCipher(store, address)
-            logger.warning('Closing session for', addr, device_id)
+            stores = [store] * 4
+            sessionCipher = SessionCipher(*stores, addr, device_id)
+            logger.warning('Closing session for: %s %s' % (addr, device_id))
             sessionCipher.closeOpenSessionForDevice()

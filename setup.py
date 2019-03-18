@@ -27,7 +27,7 @@ setup(
     install_requires=[
         'python-axolotl',
         'aiohttp>=3.2.1',
-        'protobuf>=3.0.0.b2'
+        'protobuf>=3.7.0'
     ],
     test_suite='test',
     classifiers=[

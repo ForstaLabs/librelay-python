@@ -51,12 +51,11 @@ class Exchange(object):
         self.decodePayload(payload)
 
     def encode(self):
-        # XXX Port
-        return protobufs.DataMessage.create({
-            "flags": self.getFlags(),
-            "expireTimer": self.getExpiration(),
-            "body": json.encode([self.encodePayload()])
-        })
+        dataMessage = protobufs.DataMessage()
+        dataMessage.flags = self.getFlags()
+        dataMessage.expireTimer=self.getExpiration()
+        dataMessage.body = json.dumps([self.encodePayload()])
+        return dataMessage
 
     async def send(self, onlySender=False, **kwargs):
         """ Send a message to self exchange's thread. """
@@ -411,9 +410,9 @@ ExchangeClasses[1] = ExchangeV1
 def decode(dataMessage, **kwargs):
     """ Return a versioned Exchange instance based on the protocol buffer
     argument. """
-    if not isinstance(dataMessage, protobufs.DataMessage.ctor):
+    if not isinstance(dataMessage, protobufs.DataMessage):
         raise TypeError("DataMessage argument required")
-    payload = json.decode(dataMessage.body)
+    payload = json.loads(dataMessage.body)
     payload.sort(key=lambda x: x['version'], reverse=True)
     for x in payload:
         if x['version'] in ExchangeClasses:

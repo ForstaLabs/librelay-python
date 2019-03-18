@@ -5,6 +5,9 @@ logging.basicConfig(level=0)
 
 async def onMessage(ev):
     print("Got message", ev.data)
+    exchange = ev.data['exchange']
+    if exchange.getMessageType() == 'content':
+        await exchange.send(text="cool beans: %s" % (exchange.getBody()))
 
 async def onSent(ev):
     print("Got SENT message", ev.data)

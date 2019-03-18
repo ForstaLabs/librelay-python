@@ -312,15 +312,15 @@ class ExchangeV1(Exchange):
         body = self._payload.get('data', {}).get('body')
         if not body:
             return
-        entries = None
+        entries = body
         if html:
             entries = [x for x in body if x['type'] == 'text/html']
         if not entries:
             entries = [x for x in body if x['type'] == 'text/plain']
         if not entries:
-            entry = body[0]
-            logger.warn("Unexpected type:", entry['type'])
-        return entry['value']
+            logger.warn("Unexpected body type(s):", body)
+        else:
+            return entries[0]['value']
 
     def setBody(self, value, html=False):
         body = self.getDataProperty('body')
@@ -333,76 +333,76 @@ class ExchangeV1(Exchange):
         })
 
     def getSender(self):
-        return self._payload.sender and self._payload.sender.userId
+        return self._payload.get('sender', {}).get('userId')
 
     def setSender(self, value):
-        self._payload.sender = {
+        self._payload['sender'] = {
             "userId": value
         }
 
-    def getThreadExpression(self, value):
-        return self._payload.distribution and self._payload.distribution.expression
+    def getThreadExpression(self):
+        return self._payload.get('distribution', {}).get('expression')
 
     def setThreadExpression(self, value):
-        if not self._payload.distribution:
-            self._payload.distribution = {}
-        self._payload.distribution.expression = value
+        if 'distribution' not in self._payload:
+            self._payload['distribution'] = {}
+        self._payload['distribution']['expression'] = value
 
     def getThreadId(self):
-        return self._payload.threadId
+        return self._payload.get('threadId')
 
     def setThreadId(self, value):
-        self._payload.threadId = value
+        self._payload['threadId'] = value
 
     def getThreadType(self):
-        return self._payload.threadType
+        return self._payload.get('threadType')
 
     def setThreadType(self, value):
-        self._payload.threadType = value
+        self._payload['threadType'] = value
 
     def getThreadTitle(self):
-        return self._payload.threadTitle
+        return self._payload.get('threadTitle')
 
     def setThreadTitle(self, value):
-        self._payload.threadTitle = value
+        self._payload['threadTitle'] = value
 
     def getMessageId(self):
-        return self._payload.messageId
+        return self._payload.get('messageId')
 
     def setMessageId(self, value):
-        self._payload.messageId = value
+        self._payload['messageId'] = value
 
     def getMessageType(self):
-        return self._payload.messageType
+        return self._payload.get('messageType')
 
     def setMessageType(self, value):
-        self._payload.messageType = value
+        self._payload['messageType'] = value
 
     def getMessageRef(self):
-        return self._payload.messageRef
+        return self._payload.get('messageRef')
 
     def setMessageRef(self, value):
-        self._payload.messageRef = value
+        self._payload['messageRef'] = value
 
     def getAttachments(self):
-        return self._payload.attachments
+        return self._payload.get('attachments')
 
     def setAttachments(self, value):
-        self._payload.attachments = value
+        self._payload['attachments'] = value
 
     def getUserAgent(self):
-        return self._payload.userAgent
+        return self._payload.get('userAgent')
 
     def setUserAgent(self, value):
-        self._payload.userAgent = value
+        self._payload['userAgent'] = value
 
     def getDataProperty(self, key):
-        return self._payload.data and self._payload.data[key]
+        return self._payload.get('data', {}).get(key)
 
     def setDataProperty(self, key, value):
-        if not self._payload.data:
-            self._payload.data = {}
-        self._payload.data[key] = value
+        if 'data' not in self._payload:
+            self._payload['data'] = {}
+        self._payload['data'][key] = value
 
 ExchangeClasses[1] = ExchangeV1
 

@@ -258,6 +258,7 @@ class MessageReceiver(eventing.EventTarget):
             "source": envelope.source,
             "sourceDevice": envelope.sourceDevice,
             "message": message,
+            "exchange": ex,
             "keyChange": keychange,
             "age": envelope.age
         }

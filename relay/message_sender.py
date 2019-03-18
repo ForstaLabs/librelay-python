@@ -4,11 +4,11 @@ Forsta message sending interface.
 
 import asyncio
 import datetime
-import json
 import logging
 import secrets
 import uuid
 from . import crypto, eventing, hub, storage
+from . import exchange
 from . import protobufs
 from .attachment import Attachment
 from .outgoing_message import OutgoingMessage
@@ -22,33 +22,12 @@ def msnow():
     return round(datetime.datetime.now().timestamp() * 1000)
 
 
-class Message(object):
-    """ XXX This is a silly interface right now..  prove your worth! """
-
-    def __init__(self, **options):
-        self.__dict__.update(options)  # XXX ick.. 
-
-    def isEndSession(self):
-        return self.flags & protobufs.DataMessage.END_SESSION
-
-    def toProto(self):
-        content = protobufs.Content()
-        dataMessage = content.dataMessage
-        if getattr(self, 'body', None):
-            dataMessage.body = json.dumps(self.body)
-        if getattr(self, 'attachmentPointers', None):
-            dataMessage.attachments = self.attachmentPointers
-        if getattr(self, 'flags', None):
-            dataMessage.flags = self.flags
-        if getattr(self, 'expiration', None):
-            dataMessage.expireTimer = self.expiration
-        return content
-
-
 class MessageSender(eventing.EventTarget):
 
     def __init__(self, addr, signal, atlas):
-        assert addr and signal and  atlas
+        assert addr
+        assert isinstance(signal, hub.SignalClient)
+        assert isinstance(atlas, hub.AtlasClient)
         self.addr = addr
         self.signal = signal
         self.atlas = atlas
@@ -60,7 +39,7 @@ class MessageSender(eventing.EventTarget):
         atlas = hub.AtlasClient.factory()
         return cls(addr, signal, atlas)
 
-    async def makeAttachmentPointer(self, attachment):
+    async def _makeAttachmentPointer(self, attachment):
         assert isinstance(attachment, Attachment)
         key = secrets.token_bytes(64)
         ptr = protobufs.AttachmentPointer()
@@ -71,14 +50,9 @@ class MessageSender(eventing.EventTarget):
         ptr.id = await self.signal.putAttachment(encrypted)
         return ptr
 
-    async def uploadAttachments(self, message):
-        if message.attachments:
-            uploads = map(message.attachments, self.makeAttachmentPointer)
-            message.attachmentPointers = await asyncio.gather(uploads)
-
     async def send(self,
-        to=None, distribution=None,
-        text=None, html=None, body=None,
+        to=None, distribution=None, addrs=None,
+        text=None, html=None,
         data=None,
         threadId=None,
         threadType='conversation',
@@ -86,81 +60,81 @@ class MessageSender(eventing.EventTarget):
         messageType='content',
         messageId=None,
         messageRef=None,
-        expiration=None,
+        expiration=0,
         attachments=None,
-        flags=None,
-        sendTime=datetime.datetime.now(),
-        userAgent='librelay-python'):
-        if data is None:
-            data = {}
-        if threadId is None:
-            threadId = str(uuid.uuid4())
+        flags=0,
+        userAgent='librelay-python',
+        noSync=False,
+        actions=None,
+        actionOptions=None):
+        """ Primary method for sending messages. """
+        ex = exchange.create()
+        if distribution is None:
+            if to is not None:
+                distribution = await self.atlas.resolveTags(to)
+            elif not addrs:
+                raise TypeError("`to`, `distribution` or `addrs` required")
+        if distribution is not None:
+            ex.setThreadExpression(distribution['universal'])
+        if text is not None:
+            ex.setBody(text)
+        if html is not None:
+            ex.setBody(html, html=True)
+        ex.setThreadId(threadId)
+        ex.setThreadType(threadType)
+        ex.setThreadTitle(threadTitle)
+        ex.setMessageType(messageType)
         if messageId is None:
             messageId = str(uuid.uuid4())
-        if distribution is None:
-            if to is None:
-                raise TypeError("`to` or `distribution` required")
-            distribution = await self.atlas.resolveTags(to)
-        if body is None:
-            body = []
-        if text:
-            body.append({
-                "type": 'text/plain',
-                "value": text
-            })
-        if html:
-            body.append({
-                "type": 'text/html',
-                "value": html
-            })
-        if body:
-            data['body'] = body
+        ex.setMessageId(messageId)
+        ex.setMessageRef(messageRef)
+        ex.setUserAgent(userAgent)
+        ex.setSource(self.addr)
+        ex.setExpiration(expiration)
+        ex.setFlags(flags)
+        if actions:
+            ex.setDataProperty('actions', actions)
+            if actionOptions:
+                ex.setDataProperty('actionOptions', actionOptions)
+        if data:
+            for k, v in data.items():
+                ex.setDataProperty(k, v)
         if attachments:
-            data['attachments'] = [x.getMeta() for x in attachments]
-        timestamp = msnow()
-        msg = Message(
-            addrs=distribution['userids'],
-            threadId=threadId,
-            body=[{
-                "version": 1,
-                "threadId": threadId,
-                "threadType": threadType,
-                "messageId": messageId,
-                "messageType": messageType,
-                "messageRef": messageRef,
-                "distribution": {
-                    "expression": distribution['universal']
-                },
-                "sender": {
-                    "userId": self.addr
-                },
-                "sendTime": sendTime.isoformat(),
-                "userAgent": userAgent,
-                "data": data
-            }],
-            timestamp = timestamp,
-            attachments = attachments,
-            expiration = expiration,
-            flags = flags)
-        await self.uploadAttachments(msg)
-        msgProto = msg.toProto()
-        await self._sendSync(msgProto, timestamp, threadId,
-                             expiration and timestamp)
-        return await self._send(msgProto, timestamp,
-                                self.scrubSelf(distribution['userids']))
+            # TODO Port to exchange interfaces (TBD)
+            ex.setAttachments([x.getMeta() for x in attachments])
+        dataMessage = ex.encode()
+        if attachments:
+            # TODO Port to exchange interfaces (TBD)
+            uploads = map(attachments, self._makeAttachmentPointer)
+            dataMessage.attachments = await asyncio.gather(uploads)
+        content = protobufs.Content(dataMessage=dataMessage)
+        ts = msnow()
+        outMsg = self._send(content, ts,
+                            self._scrubSelf(addrs or distribution['userids']))
+        if not noSync:
+            syncOutMsg = self._sendSync(content, ts, threadId, expiration and msnow())
+            # Relay events from out message into the normal (non-sync) out-msg.  Even
+            # if this message is just for us, it makes the interface consistent.
+            syncOutMsg.on('sent', lambda entry: outMsg._emitSentEntry(entry))
+            syncOutMsg.on('error', lambda entry: outMsg._emitErrorEntry(entry))
+        return outMsg
 
-    async def _send(self, msgProto, timestamp, addrs):
+    def _send(self, content, timestamp, addrs):
         assert all(addrs)
         logger.debug(f"Sending to: {addrs}")
-        m = OutgoingMessage(self.signal, timestamp, msgProto)
-        m.on('keychange', self.onKeyChange)
-        for res in asyncio.as_completed([m.sendToAddr(x) for x in addrs]):
+        outmsg = OutgoingMessage(self.signal, timestamp, content)
+        outmsg.on('keychange', self.onKeyChange)
+
+        async def sendWrap(addr):
             try:
-                await res
+                await outmsg.sendToAddr(addr)
             except Exception as e:
                 logger.exception('Message send error')
                 await self.onError(e)
-        return m
+        loop = asyncio.get_event_loop()
+        for x in addrs:
+            loop.create_task(sendWrap(x))
+        return outmsg
 
     async def onError(self, e):
         ev = eventing.Event('error')
@@ -170,17 +144,18 @@ class MessageSender(eventing.EventTarget):
     async def onKeyChange(self, e):
         await self.dispatchEvent(eventing.KeyChangeEvent(e))
 
-    async def _sendSync(self, content, timestamp, threadId,
-                        expirationStartTimestamp):
-        content = protobufs.Content()
-        sent = content.syncMessage.sent
-        sent.timestamp = timestamp
-        sent.message.CopyFrom(content.dataMessage)
+    def _sendSync(self, content, timestamp, threadId,
+                  expirationStartTimestamp):
+        sentMessage = protobufs.SyncMessage.Sent()
+        sentMessage.timestamp = timestamp
+        sentMessage.message.CopyFrom(content.dataMessage)
         if threadId:
-            sent.destination = threadId
+            sentMessage.destination = threadId
         if expirationStartTimestamp:
-            sent.expirationStartTimestamp = expirationStartTimestamp
-        return await self._send(content, timestamp, [self.addr])
+            sentMessage.expirationStartTimestamp = expirationStartTimestamp
+        syncMessage = protobufs.SyncMessage(sent=sentMessage)
+        syncContent = protobufs.Content(syncMessage=syncMessage)
+        return self._send(syncContent, timestamp, [self.addr])
 
     async def syncReadMessages(self, reads):
         if not reads:
@@ -197,7 +172,7 @@ class MessageSender(eventing.EventTarget):
         content.syncMessage = syncMessage
         return await self._send(content, msnow(), [self.addr])
 
-    def scrubSelf(self, addrs):
+    def _scrubSelf(self, addrs):
         return [x for x in addrs if x != self.addr]
 
     async def closeSession(self, addr, timestamp=None):

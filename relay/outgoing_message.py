@@ -1,8 +1,8 @@
 import asyncio
 import base64
 import datetime
+import inspect
 import logging
-import traceback
 from . import errors, storage, protobufs
 from .queue_async import queue_async
 from axolotl.sessionbuilder import SessionBuilder
@@ -35,40 +35,41 @@ class OutgoingMessage(object):
             handlers = self._listeners[event] = []
         handlers.append(callback)
 
-    async def emit(self, event, *args, **kwargs):
+    async def _emit(self, event, *args, **kwargs):
         handlers = self._listeners.get(event)
         if not handlers:
             return
         for callback in handlers:
             try:
-                await callback(*args, **kwargs)
+                r = callback(*args, **kwargs)
+                if inspect.isawaitable(r):
+                    await r
             except Exception as e:
                 logger.exception("Event callback error")
 
-    async def emitError(self, addr, reason, error):
-        trace = ''.join(traceback.format_exception(type(error), error,
-                                                     error.__traceback__))
-        logger.error(f'{reason}: {error}\n{trace}')
-        if not error or isinstance(error, errors.ProtocolError) and \
-           error.code != 404:
-            error = errors.OutgoingMessageError(addr, self.message,
-                                                self.timestamp, error)
+    def _emitError(self, addr, reason, error):
         error.addr = addr
         error.reason = reason
-        entry = {
+        self._emitErrorEntry({
             "timestamp": msnow(),
             "error": error
-        }
-        self.errors.append(entry)
-        await self.emit('error', entry)
+        })
 
-    async def emitSent(self, addr):
-        entry = {
+    def _emitErrorEntry(self, entry):
+        self.errors.append(entry)
+        loop = asyncio.get_event_loop()
+        loop.create_task(self._emit('error', entry))
+
+    def _emitSent(self, addr):
+        self._emitSentEntry({
             "timestamp": msnow(),
             "addr": addr
-        }
+        })
+
+    def _emitSentEntry(self, entry):
         self.sent.append(entry)
-        await self.emit('sent', entry)
+        loop = asyncio.get_event_loop()
+        loop.create_task(self._emit('sent', entry))
 
     async def getKeysForAddr(self, addr, devices=None, _retries=0):
         our_ident = None
@@ -98,7 +99,7 @@ class OutgoingMessage(object):
                     keyError = errors.OutgoingIdentityKeyError(addr,
                                                                remoteIdent)
                     if not _retries:
-                        await self.emit('keychange', keyError)
+                        await self._emit('keychange', keyError)
                         if not keyError.accepted:
                             raise keyError
                         await self.getKeysForAddr(addr, devices,
@@ -129,9 +130,9 @@ class OutgoingMessage(object):
             else:
                 raise
 
-    async def transmitMessage(self, addr, json, timestamp):
+    async def _sendMessages(self, addr, messages, timestamp):
         try:
-            return await self.signal.sendMessages(addr, json, timestamp)
+            return await self.signal.sendMessages(addr, messages, timestamp)
         except errors.ProtocolError as e:
             if e.code == 404:
                 raise errors.UnregisteredUserError(addr, e)
@@ -158,7 +159,7 @@ class OutgoingMessage(object):
             regId = state.getRemoteRegistrationId(None)
             messages.append(self.encryptToDevice(x, regId, paddedBuf, sc))
         try:
-            await self.transmitMessage(addr, messages, self.timestamp)
+            await self._sendMessages(addr, messages, self.timestamp)
         except errors.ProtocolError as e:
             if e.code in (409, 410):
                 if _retries >= 2:
@@ -173,10 +174,40 @@ class OutgoingMessage(object):
                 await self.getKeysForAddr(addr, devices=update)
                 await self._sendToAddr(addr, _retries=_retries+1)
             else:
-                await self.emitError(addr, "Failed to send message", e)
-                raise
+                self._emitError(addr, "Failed to send message", e)
+                return
         else:
-            await self.emitSent(addr)
+            self._emitSent(addr)
+
+    async def _sendToDevice(self, addr, deviceId, _retries=0):
+        buf = self.message.SerializeToString()
+        minLen = self.getPaddedMessageLength(len(buf) + 1) - 1
+        paddedBuf = buf + b'\x80' + (b'\00' * (minLen - len(buf) - 1))
+        stores = [store] * 4
+        sessionCipher = SessionCipher(*stores, addr, deviceId)
+        state = store.loadSession(addr, deviceId).getSessionState()
+        regId = state.getRemoteRegistrationId(None)
+        messageBundle = self.encryptToDevice(deviceId, regId, paddedBuf,
+                                             sessionCipher)
+        try:
+            await self.signal.sendMessage(addr, deviceId, messageBundle,
+                                          self.timestamp)
+        except errors.ProtocolError as e:
+            if e.code == 410:
+                if _retries > 1:
+                    raise RuntimeError("Too many retries updating remote keys")
+                elif e.code == 410:
+                    sessionCipher.closeOpenSession()
+                    await self._sendToDevice(addr, deviceId,
+                                             _retries=_retries+1)
+                elif e.code in (401, 403):
+                    raise e
+                else:
+                    self._emitError(addr, "Failed to send message", e)
+                    return
+        else:
+            self._emitSent(addr)
+
 
     def encryptToDevice(self, deviceId, deviceRegId, buf, sessionCipher):
         msg = sessionCipher.encrypt(buf)

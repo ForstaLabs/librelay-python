@@ -22,7 +22,7 @@ class HttpClient(object):
             is_json = resp.content_type.startswith('application/json')
             data = await resp.json() if is_json else await resp.text()
             url = f'{self.url}/{urn.lstrip("/")}'
-            logger.debug(f"Fetch {method} response {url}: [{resp.status}] -> {data}")
+            logger.debug(f"Fetch {method} response {url}: [{resp.status}]")
             resp.raise_for_status()
             return data
 
@@ -35,7 +35,7 @@ class HttpClient(object):
             if auth:
                 headers['Authorization'] = auth
         url = f'{self.url}/{urn.lstrip("/")}'
-        logger.debug(f"Fetch {method} request {url} {headers}")
+        logger.debug(f"Fetch {method} request {url}")
         return self.httpSession.request(url=url, headers=headers, method=method,
                                         json=json, **request_options)
 

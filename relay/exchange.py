@@ -57,11 +57,12 @@ class Exchange(object):
         dataMessage.body = json.dumps([self.encodePayload()])
         return dataMessage
 
-    async def send(self, onlySender=False, **kwargs):
+    async def send(self, onlySender=False, addrs=None, **kwargs):
         """ Send a message to self exchange's thread. """
         atlas = await self._getAtlasClient()
         distribution = await atlas.resolveTags(self.getThreadExpression())
-        addrs = [self.getSender()] if onlySender else None
+        if addrs is None:
+            addrs = [self.getSender()] if onlySender else None
         sender = await self._getMessageSender()
         return await sender.send(distribution=distribution, addrs=addrs,
                                  threadId=self.getThreadId(),
@@ -395,6 +396,12 @@ class ExchangeV1(Exchange):
 
     def setUserAgent(self, value):
         self._payload['userAgent'] = value
+
+    def getData(self):
+        return self._payload.get('data')
+
+    def setData(self, value):
+        self._payload['data'] = value
 
     def getDataProperty(self, key):
         return self._payload.get('data', {}).get(key)

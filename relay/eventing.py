@@ -18,14 +18,15 @@ class KeyChangeEvent(Event):
     def __init__(self, key_error):
         super().__init__('keychange')
         self.accepted = False
+        self.addr = self.key_error.name
         self.key_error = key_error
 
     def __str__(self):
-        return f'<KeyChangeEvent: {self.key_error}>'
+        return f'<KeyChangeEvent: {self.addr}>'
 
     def accept(self):
-        store.removeIdentity(self.key_error.name)
-        store.saveIdentity(self.key_error.name, self.key_error.getIdentityKey())
+        store.removeIdentity(self.addr)
+        store.saveIdentity(self.addr, self.key_error.getIdentityKey())
         self.accepted = True
 
 

@@ -28,6 +28,8 @@ class OutgoingMessage(object):
         self.errors = []
         self.created = msnow()
         self._listeners = {}
+        self._ourAddr = store.getState('addr');
+        self._ourDeviceId = store.getState('deviceId');
 
     def on(self, event, callback):
         handlers = self._listeners.get(event)
@@ -71,7 +73,17 @@ class OutgoingMessage(object):
         loop = asyncio.get_event_loop()
         loop.create_task(self._emit('sent', entry))
 
-    async def getKeysForAddr(self, addr, devices=None, _retries=0):
+    async def _handleIdentityKeyError(self, e):
+        assert isinstance(e, UntrustedIdentityException)
+        entry = {
+            "key_error": e,
+            "accepted": False
+        }
+        await self._emit('keychange', entry)
+        if not entry['accepted']:
+            raise e
+
+    async def getKeysForAddr(self, addr, devices=None, _reentrant=False):
         our_ident = None
 
         async def buildSessions(remoteIdent, deviceKeys):
@@ -96,16 +108,11 @@ class OutgoingMessage(object):
                 try:
                     builder.processPreKeyBundle(pkb)
                 except UntrustedIdentityException as e:
-                    keyError = errors.OutgoingIdentityKeyError(addr,
-                                                               remoteIdent)
-                    if not _retries:
-                        await self._emit('keychange', keyError)
-                        if not keyError.accepted:
-                            raise keyError
-                        await self.getKeysForAddr(addr, devices,
-                                                  _retries=_retries+1)
+                    if not _reentrant:
+                        await self._handleIdentityKeyError(e)
                     else:
-                        raise keyError
+                        raise
+                    await self.getKeysForAddr(addr, devices, _reentrant=True)
         if devices is None:
             data = await self.signal.getKeysForAddr(addr)
             ident = data['identityKey']
@@ -146,40 +153,50 @@ class OutgoingMessage(object):
             messagePartCount += 1
         return messagePartCount * 160
 
-    async def _sendToAddr(self, addr, _retries=0):
+    async def _sendToAddr(self, addr, _reentrant=False):
         buf = self.message.SerializeToString()
         minLen = self.getPaddedMessageLength(len(buf) + 1) - 1
         paddedBuf = buf + b'\x80' + (b'\00' * (minLen - len(buf) - 1))
-        messages = []
+        deviceIds = store.getDeviceIds(addr)
         stores = [store] * 4
-        ciphers = {}
-        for x in store.getDeviceIds(addr):
-            ciphers[x] = sc = SessionCipher(*stores, addr, x)
-            state = store.loadSession(addr, x).getSessionState()
-            regId = state.getRemoteRegistrationId(None)
-            messages.append(self.encryptToDevice(x, regId, paddedBuf, sc))
+        for attempt in range(2):
+            ciphers = {}
+            messages = []
+            try:
+                for x in deviceIds:
+                    ciphers[x] = sc = SessionCipher(*stores, addr, x)
+                    state = store.loadSession(addr, x).getSessionState()
+                    regId = state.getRemoteRegistrationId(None)
+                    messages.append(self.encryptToDevice(x, regId, paddedBuf,
+                                                         sc))
+                break
+            except UntrustedIdentityException as e:
+                if not attempt:
+                    await self._handleIdentityKeyError(e)
+                else:
+                    raise
+            except Exception as e:
+                self._emitError(addr, 'Failed to create message', e)
+                raise
         try:
             await self._sendMessages(addr, messages, self.timestamp)
         except errors.ProtocolError as e:
-            if e.code in (409, 410):
-                if _retries >= 2:
-                    raise RuntimeError("Too many retries updating remote keys")
-                elif e.code == 409:
-                    self.deleteSessions(addr, e.response['extraDevices'])
-                else:
-                    for x in e.response['staleDevices']:
-                        ciphers[x].closeOpenSessionForDevice()
-                update = e.response.get('staleDevices', []) + \
-                         e.response.get('missingDevices', [])
-                await self.getKeysForAddr(addr, devices=update)
-                await self._sendToAddr(addr, _retries=_retries+1)
-            else:
+            if e.code not in (409, 410) or _reentrant:
                 self._emitError(addr, "Failed to send message", e)
-                return
+                raise
+            if e.code == 409:
+                self.deleteSessions(addr, e.response['extraDevices'])
+            else:
+                for x in e.response['staleDevices']:
+                    ciphers[x].closeOpenSessionForDevice()
+            update = e.response.get('staleDevices', []) + \
+                     e.response.get('missingDevices', [])
+            await self.getKeysForAddr(addr, devices=update)
+            await self._sendToAddr(addr, _reentrant=True)
         else:
             self._emitSent(addr)
 
-    async def _sendToDevice(self, addr, deviceId, _retries=0):
+    async def _sendToDevice(self, addr, deviceId, _reentrant=False):
         buf = self.message.SerializeToString()
         minLen = self.getPaddedMessageLength(len(buf) + 1) - 1
         paddedBuf = buf + b'\x80' + (b'\00' * (minLen - len(buf) - 1))
@@ -187,27 +204,25 @@ class OutgoingMessage(object):
         sessionCipher = SessionCipher(*stores, addr, deviceId)
         state = store.loadSession(addr, deviceId).getSessionState()
         regId = state.getRemoteRegistrationId(None)
-        messageBundle = self.encryptToDevice(deviceId, regId, paddedBuf,
-                                             sessionCipher)
-        try:
-            await self.signal.sendMessage(addr, deviceId, messageBundle,
-                                          self.timestamp)
-        except errors.ProtocolError as e:
-            if e.code == 410:
-                if _retries > 1:
-                    raise RuntimeError("Too many retries updating remote keys")
-                elif e.code == 410:
-                    sessionCipher.closeOpenSession()
-                    await self._sendToDevice(addr, deviceId,
-                                             _retries=_retries+1)
-                elif e.code in (401, 403):
-                    raise e
+        for attempt in range(2):
+            try:
+                messageBundle = self.encryptToDevice(deviceId, regId, paddedBuf,
+                                                     sessionCipher)
+            except UntrustedIdentityException as e:
+                if not attempt:
+                    await self._handleIdentityKeyError(e)
                 else:
-                    self._emitError(addr, "Failed to send message", e)
-                    return
+                    raise
+        try:
+            await self.signal.sendMessage(addr, deviceId, messageBundle)
+        except errors.ProtocolError as e:
+            if e.code != 410 or _reentrant:
+                self._emitError(addr, "Failed to send message", e)
+                raise
+            sessionCipher.closeOpenSession()
+            await self._sendToDevice(addr, deviceId, _reentrant=True)
         else:
             self._emitSent(addr)
-
 
     def encryptToDevice(self, deviceId, deviceRegId, buf, sessionCipher):
         msg = sessionCipher.encrypt(buf)
@@ -218,7 +233,8 @@ class OutgoingMessage(object):
             }[msg.getType()],
             "destinationDeviceId": deviceId,
             "destinationRegistrationId": deviceRegId,
-            "content": base64.b64encode(msg.serialize()).decode()
+            "content": base64.b64encode(msg.serialize()).decode(),
+            "timestamp": self.timestamp
         }
 
     def deleteSessions(self, addr, deviceIds):
@@ -227,9 +243,18 @@ class OutgoingMessage(object):
 
     async def sendToAddr(self, addr):
         """ Serialized send routine that protects session from corruption. """
+        try:
+            addr, deviceId = addr.split('.')
+        except ValueError:
+            deviceId = None
+        else:
+            deviceId = int(deviceId)
         bucket = f'outgoing-msg-{addr}'
         try:
-            await queue_async(bucket, self._sendToAddr(addr))
+            if deviceId is not None:
+                await queue_async(bucket, self._sendToDevice(addr, deviceId))
+            else:
+                await queue_async(bucket, self._sendToAddr(addr))
         except Exception as e:
-            await self.emitError(addr, "Send error", e)
+            self._emitError(addr, "Send error", e)
             raise

@@ -141,8 +141,13 @@ class MessageSender(eventing.EventTarget):
         ev.error = e
         await self.dispatchEvent(ev)
 
-    async def onKeyChange(self, e):
-        await self.dispatchEvent(eventing.KeyChangeEvent(e))
+    async def onKeyChange(self, entry):
+        keyChangeEvent = eventing.KeyChangeEvent(entry['key_error'])
+        await self.dispatchEvent(keyChangeEvent)
+        if keyChangeEvent.accepted:
+            # Copy the keychange acceptance to the entry so the outgoing
+            # message can proceed.
+            entry['accepted'] = True
 
     def _sendSync(self, content, timestamp, threadId,
                   expirationStartTimestamp):

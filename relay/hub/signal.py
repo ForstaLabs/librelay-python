@@ -184,6 +184,11 @@ class SignalClient(http.HttpClient):
                                   json={"messages": messages,
                                         "timestamp": timestamp})
 
+    async def sendMessage(self, addr, deviceId, message):
+        return await self.request(call='messages', method='PUT',
+                                  urn=f'/{addr}/{deviceId}',
+                                  json=message)
+
     async def getAttachment(self, id):
         """ XXX Build in retry handling... """
         ptr = await self.request(call='attachment', urn=f'/{id}')

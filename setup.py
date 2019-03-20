@@ -16,7 +16,7 @@ def long_desc():
 
 setup(
     name='librelay',
-    version='0.5.0',
+    version='0.6.0',
     description='Forsta messaging protocol library',
     author='Justin Mayfield',
     author_email='tooker@gmail.com',
@@ -25,7 +25,7 @@ setup(
     long_description=long_desc(),
     packages=find_packages(),
     install_requires=[
-        'python-axolotl',
+        'libsignal>=0.0.2',
         'aiohttp>=3.2.1',
         'protobuf>=3.7.0'
     ],

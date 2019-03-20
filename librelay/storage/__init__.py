@@ -1,5 +1,5 @@
 """
-Modular axolotl storage interface.
+Modular signal storage interface.
 """
 
 import asyncio
@@ -9,13 +9,13 @@ import logging
 import os
 import re
 from . import backing
-from axolotl.identitykey import IdentityKey
-from axolotl.identitykeypair import IdentityKeyPair
-from axolotl.invalidkeyidexception import InvalidKeyIdException
-from axolotl.state.axolotlstore import AxolotlStore
-from axolotl.state.prekeyrecord import PreKeyRecord
-from axolotl.state.sessionrecord import SessionRecord
-from axolotl.state.signedprekeyrecord import SignedPreKeyRecord
+from libsignal.identitykey import IdentityKey
+from libsignal.identitykeypair import IdentityKeyPair
+from libsignal.invalidkeyidexception import InvalidKeyIdException
+from libsignal.state.axolotlstore import AxolotlStore
+from libsignal.state.prekeyrecord import PreKeyRecord
+from libsignal.state.sessionrecord import SessionRecord
+from libsignal.state.signedprekeyrecord import SignedPreKeyRecord
 
 logger = logging.getLogger(__name__)
 _store = None

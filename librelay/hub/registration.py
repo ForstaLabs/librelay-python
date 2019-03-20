@@ -9,9 +9,9 @@ from ..provisioning_cipher import ProvisioningCipher
 from ..websocket_resource import WebSocketResource
 from .atlas import AtlasClient
 from .signal import SignalClient
-from axolotl.identitykey import IdentityKey
-from axolotl.identitykeypair import IdentityKeyPair
-from axolotl.util.keyhelper import KeyHelper
+from libsignal.identitykey import IdentityKey
+from libsignal.identitykeypair import IdentityKeyPair
+from libsignal.util.keyhelper import KeyHelper
 
 
 store = storage.getStore()
@@ -30,7 +30,7 @@ def generateSignalingKey():
 async def registerAccount(atlasClient=None, name=defaultName):
     if atlasClient is None:
         atlasClient = AtlasClient.factory()
-    # Workaround axolotl bug that generates unsigned ints.
+    # XXX Workaround signal bug that generates unsigned ints.
     registrationId = KeyHelper.generateRegistrationId() & 0x7fffffff
     password = generatePassword()
     signalingKey = generateSignalingKey()
@@ -113,7 +113,7 @@ async def registerDevice(atlasClient=None, name=defaultName,
                                    pmsg['identityKeyPair'].getPrivateKey())
         if pmsg['addr'] != accountInfo['userId']:
             raise Exception('Security Violation: Foreign account sent us an identity key!')
-        # Workaround axolotl bug that generates unsigned ints.
+        # XXX Workaround signal bug that generates unsigned ints.
         registrationId = KeyHelper.generateRegistrationId() & 0x7fffffff
         password = generatePassword()
         signalingKey = generateSignalingKey()

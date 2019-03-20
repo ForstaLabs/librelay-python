@@ -5,10 +5,10 @@ import inspect
 import logging
 from . import errors, storage, protobufs
 from .queue_async import queue_async
-from axolotl.sessionbuilder import SessionBuilder
-from axolotl.sessioncipher import SessionCipher
-from axolotl.state.prekeybundle import PreKeyBundle
-from axolotl.untrustedidentityexception import UntrustedIdentityException
+from libsignal.sessionbuilder import SessionBuilder
+from libsignal.sessioncipher import SessionCipher
+from libsignal.state.prekeybundle import PreKeyBundle
+from libsignal.untrustedidentityexception import UntrustedIdentityException
 
 logger = logging.getLogger(__name__)
 store = storage.getStore()

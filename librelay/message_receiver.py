@@ -10,11 +10,11 @@ from . import message_sender
 from . import protobufs
 from . import storage
 from .websocket_resource import WebSocketResource
-from axolotl.duplicatemessagexception import DuplicateMessageException
-from axolotl.protocol.prekeywhispermessage import PreKeyWhisperMessage
-from axolotl.protocol.whispermessage import WhisperMessage
-from axolotl.sessioncipher import SessionCipher
-from axolotl.untrustedidentityexception import UntrustedIdentityException
+from libsignal.duplicatemessagexception import DuplicateMessageException
+from libsignal.protocol.prekeywhispermessage import PreKeyWhisperMessage
+from libsignal.protocol.whispermessage import WhisperMessage
+from libsignal.sessioncipher import SessionCipher
+from libsignal.untrustedidentityexception import UntrustedIdentityException
 
 
 store = storage.getStore()

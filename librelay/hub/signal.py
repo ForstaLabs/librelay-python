@@ -1,14 +1,13 @@
 import aiohttp
-import asyncio
 import logging
 import re
 import yarl
 from . import http
 from .. import protobufs, storage, errors
 from ..provisioning_cipher import ProvisioningCipher
-from axolotl.ecc.curve import Curve
-from axolotl.identitykey import IdentityKey
-from axolotl.util.keyhelper import KeyHelper
+from libsignal.ecc.curve import Curve
+from libsignal.identitykey import IdentityKey
+from libsignal.util.keyhelper import KeyHelper
 from base64 import b64decode as _b64decode, b64encode
 
 store = storage.getStore()

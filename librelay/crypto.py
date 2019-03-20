@@ -1,6 +1,6 @@
 import hashlib
 import hmac
-from axolotl.sessioncipher import AESCipher
+from libsignal.sessioncipher import AESCipher
 
 
 def sign(key, data):

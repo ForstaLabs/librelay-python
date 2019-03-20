@@ -4,11 +4,11 @@ Device onboarding protocol
 
 from . import crypto
 from . import protobufs
-from axolotl.ecc.curve import Curve
-from axolotl.ecc.eckeypair import ECKeyPair
-from axolotl.ecc.djbec import DjbECPublicKey, DjbECPrivateKey
-from axolotl.kdf.hkdf import HKDF
-from axolotl.sessioncipher import AESCipher
+from libsignal.ecc.curve import Curve
+from libsignal.ecc.eckeypair import ECKeyPair
+from libsignal.ecc.djbec import DjbECPublicKey, DjbECPrivateKey
+from libsignal.kdf.hkdf import HKDF
+from libsignal.sessioncipher import AESCipher
 
 
 class ProvisioningCipher(object):

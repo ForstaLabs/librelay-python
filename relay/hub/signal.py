@@ -131,13 +131,12 @@ class SignalClient(http.HttpClient):
             data = await resp.json() if is_json else await resp.text()
             url = f'{self.url}/{urn.lstrip("/")}'
             logger.debug(f"Fetch {method} response {url}: [{resp.status}] -> {data}")
-            resp.raise_for_status()
             if resp.status < 200 or resp.status >= 400:
                 e = errors.ProtocolError(resp.status, data)
                 if e.code in SIGNAL_HTTP_MESSAGES:
                     e.message = SIGNAL_HTTP_MESSAGES[e.code]
                 else:
-                    e.message = f'Status code: {e.status}'
+                    e.message = f'Status code: {e.code}'
                 raise e
             return data
 

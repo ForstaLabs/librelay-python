@@ -13,7 +13,9 @@ class HttpClient(object):
         super().__init__(*args, **kwargs)
 
     def __del__(self):
-        asyncio.get_event_loop().create_task(self.httpSession.close())
+        loop = asyncio.get_event_loop()
+        if not loop.is_closed():
+            loop.create_task(self.httpSession.close())
         self.httpSession = None
 
     async def fetch(self, urn, method='GET', **kwargs):

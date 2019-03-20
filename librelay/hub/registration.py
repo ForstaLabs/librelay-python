@@ -30,8 +30,7 @@ def generateSignalingKey():
 async def registerAccount(atlasClient=None, name=defaultName):
     if atlasClient is None:
         atlasClient = AtlasClient.factory()
-    # XXX Workaround signal bug that generates unsigned ints.
-    registrationId = KeyHelper.generateRegistrationId() & 0x7fffffff
+    registrationId = KeyHelper.generateRegistrationId()
     password = generatePassword()
     signalingKey = generateSignalingKey()
     r = await atlasClient.fetch('/v1/provision/account', method="PUT", json={
@@ -113,8 +112,7 @@ async def registerDevice(atlasClient=None, name=defaultName,
                                    pmsg['identityKeyPair'].getPrivateKey())
         if pmsg['addr'] != accountInfo['userId']:
             raise Exception('Security Violation: Foreign account sent us an identity key!')
-        # XXX Workaround signal bug that generates unsigned ints.
-        registrationId = KeyHelper.generateRegistrationId() & 0x7fffffff
+        registrationId = KeyHelper.generateRegistrationId()
         password = generatePassword()
         signalingKey = generateSignalingKey()
         json = {

@@ -76,6 +76,8 @@ class MessageSender(eventing.EventTarget):
                 raise TypeError("`to`, `distribution` or `addrs` required")
         if distribution is not None:
             ex.setThreadExpression(distribution['universal'])
+            if addrs is None:
+                addrs = distribution['userids']
         if text is not None:
             ex.setBody(text)
         if html is not None:
@@ -110,7 +112,7 @@ class MessageSender(eventing.EventTarget):
         content = protobufs.Content(dataMessage=dataMessage)
         ts = msnow()
         outMsg = self._send(content, ts,
-                            self._scrubSelf(addrs or distribution['userids']))
+                            addrs if noSync else self._scrubSelf(addrs))
         if not noSync:
             syncOutMsg = self._sendSync(content, ts, threadId, expiration and msnow())
             # Relay events from out message into the normal (non-sync) out-msg.  Even

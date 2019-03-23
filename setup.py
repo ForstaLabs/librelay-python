@@ -26,7 +26,7 @@ setup(
     packages=find_packages(),
     install_requires=[
         'libsignal>=0.0.4',
-        'aiohttp>=3.2.1',
+        'aiohttp>=3.5.4',
         'protobuf>=3.7.0'
     ],
     test_suite='test',

@@ -39,8 +39,7 @@ class MessageReceiver(eventing.EventTarget):
         self.signaling_key = signaling_key
         if not no_web_socket:
             url = self.signal.getMessageWebSocketUrl()
-            self.wsr = WebSocketResource(url, handleRequest=self.handleRequest,
-                                         keepalive_path='/v1/keepalive')
+            self.wsr = WebSocketResource(url, handleRequest=self.handleRequest)
             self.wsr.addEventListener('close', self.onSocketClose)
             self.wsr.addEventListener('error', self.onSocketError)
 
@@ -125,7 +124,7 @@ class MessageReceiver(eventing.EventTarget):
     async def onSocketClose(self, ev):
         if self._closing:
             return
-        logger.warn('Websocket closed: %d %s' % (ev.code, ev.reason))
+        logger.warn(f'Websocket closed: {ev.code} {ev.reason}')
         await self.checkRegistration()
         if not self._closing:
             await self.connect()

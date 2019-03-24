@@ -1,6 +1,5 @@
 import aiohttp
 import asyncio
-import collections
 import inspect
 import logging
 import random
@@ -49,89 +48,20 @@ class OutgoingWebSocketRequest(Request):
         return await self.wsr.send(pbmsg.SerializeToString())
 
 
-class KeepAlive(object):
-
-    interval = 45
-
-    def __init__(self, wsr, path='/', disconnect=True):
-        self.path = path
-        self.disconnect = disconnect
-        self.wsr = wsr
-        self._tickle = asyncio.Event()
-        self._stopping = None
-
-    def start(self):
-        logger.debug("Start websocket keepalive")
-        self._stopping = False
-        self._tickle.clear()
-        self.wsr.addEventListener('close', self.stop)
-        self._monitorTask = asyncio.get_event_loop().create_task(self.monitor())
-
-    def stop(self, *na):
-        if self._stopping:
-            logger.warn("Ignoring spurious keepalive stop call")
-            return
-        logger.debug("Stop websocket keepalive")
-        self._stopping = True
-        self.wsr.removeEventListener('close', self.stop)
-        self._monitorTask.cancel()
-
-    def tickle(self):
-        self._tickle.set()
-
-    async def monitor(self):
-        try:
-            await self._monitor()
-        except asyncio.CancelledError:
-            raise
-        except Exception as e:
-            logger.exception("Keepalive monitor error:")
-
-    async def _monitor(self):
-        while not self._stopping:
-            try:
-                await asyncio.wait_for(self._tickle.wait(), self.interval)
-            except asyncio.TimeoutError:
-                if self.disconnect:
-
-                    async def closeSoon():
-                        await asyncio.sleep(5)
-                        await self.closeSocket()
-                    closeSoonTask = asyncio.get_event_loop().create_task(closeSoon())
-                    onSuccess = lambda *na: closeSoonTask.cancel()
-                else:
-                    onSuccess = None
-                await self.wsr.sendRequest(verb='GET', path=self.path,
-                                           success=onSuccess)
-            finally:
-                self._tickle.clear()
-
-    async def closeSocket(self):
-        logger.warn("Keepalive detected bad socket: Closing socket")
-        await self.wsr.close(3001, 'No response to keepalive request')
-
-
 class WebSocketResource(eventing.EventTarget):
 
-    def __init__(self, url, handleRequest=None, keepalive_path=None,
-                 keepalive_disconnect=True):
+    def __init__(self, url, handleRequest=None, heartbeat=30):
         self.url = url
         self._http = aiohttp.ClientSession()
         self._socket = None
-        self._sendQueue = collections.deque()
+        self._sendQueue = asyncio.Queue()
         self._outgoingRequests = {}
         self._connectCount = 0
         self._lastDuration = 0
         self._lastConnect = None
         self._handleRequest = handleRequest or self.handleRequestFallback
-        self._receiveTask = None
-        if keepalive_path:
-            self.keepalive = KeepAlive(self, path=keepalive_path,
-                                       disconnect=keepalive_disconnect)
-        else:
-            self.keepalive = None
-        self.addEventListener('message', self.onMessage)
-        self.addEventListener('close', self.onClose)
+        self._heartbeat = heartbeat
+        self._ioTask = None
 
     async def handleRequestFallback(self, request):
         await request.respond(404, 'Not found')
@@ -145,46 +75,61 @@ class WebSocketResource(eventing.EventTarget):
                                f'{round(delay)} seconds.')
                 await asyncio.sleep(delay)
         self._connectCount += 1
-        self._socket = await self._http.ws_connect(self.url)
+        self._socket = await self._http.ws_connect(self.url,
+            heartbeat=self._heartbeat)
         self._lastConnect = time.monotonic()
-        if self.keepalive:
-            self.keepalive.start()
-        while self._sendQueue:
-            logger.warning("Dequeuing deferred websocket message")
-            await self._socket.send_bytes(self._sendQueue.popleft())
         loop = asyncio.get_event_loop()
-        self._receive_task = loop.create_task(self.receiveLoop())
+        self._ioTask = loop.create_task(self.ioLoop(loop))
 
-    async def receiveLoop(self):
-        async for msg in self._socket:
-            if msg.type == aiohttp.WSMsgType.BINARY:
-                ev = eventing.Event('message')
-                ev.data = msg.data
-                await self.dispatchEvent(ev)
-            elif msg.type == aiohttp.WSMsgType.CLOSED:
-                import pdb;pdb.set_trace()
-                ev = eventing.Event('close')
-                ev.msg = msg
-                await self.dispatchEvent(ev)
-            elif msg.type == aiohttp.WSMsgType.ERROR:
-                import pdb;pdb.set_trace()
-                logger.error("WebSocket Error: %s" % (msg,))
-                ev = eventing.Event('error')
-                ev.msg = msg
-                await self.dispatchEvent(ev)
-            else:
-                logger.warning("Unhandled message: %s" % (msg,))
-                raise NotImplementedError(msg.type)
+    async def ioLoop(self, loop):
+        socket = self._socket
+        while socket is self._socket:
+            try:
+                await self._ioLoop(socket, loop)
+            except asyncio.CancelledError:
+                logger.debug("Websocket ioloop cancelled")
+                break
+            except Exception as e:
+                logger.exception("Websocket ioloop error:")
+                await asyncio.sleep(1)
+        logger.warn("Websocket ioloop exit")
+
+    async def _ioLoop(self, socket, loop):
+        """ This is overly complicated because aiohttp requires send and recv
+        to be in the same task. """
+        recvTask = None
+        sendTask = None
+        while socket is self._socket:
+            if recvTask is None:
+                recvTask = loop.create_task(self._socket.receive())
+            if sendTask is None:
+                sendTask = loop.create_task(self._sendQueue.get())
+            done, pending = await asyncio.wait({recvTask, sendTask},
+                                               return_when=asyncio.FIRST_COMPLETED)
+            if recvTask in done:
+                msg = await recvTask
+                recvTask = None
+                if msg.type == aiohttp.WSMsgType.BINARY:
+                    await asyncio.shield(self.messageHandler(msg.data))
+                elif msg.type == aiohttp.WSMsgType.CLOSED:
+                    await asyncio.shield(self.close(msg.data, msg.extra))
+                else:
+                    logger.error("Unhandled websocket message: %s" % (msg,))
+            if sendTask in done:
+                data = await sendTask
+                sendTask = None
+                await self._socket.send_bytes(data)
+                self._sendQueue.task_done()
 
     async def close(self, code=3000, reason=None):
         socket = self._socket
         self._socket = None
-        if self._receiveTask:
-            self._receiveTask.cancel()
-            self._receiveTask = None
-        if self.keepalive:
-            self.keepalive.stop()
-        if socket and not self._socket:
+        if self._ioTask:
+            self._ioTask.cancel()
+            self._ioTask = None
+        if self._lastConnect:
+            self._lastDuration = time.monotonic() - self._lastConnect
+        if socket:
             try:
                 await socket.close(code=code, message=reason)
             finally:
@@ -200,16 +145,11 @@ class WebSocketResource(eventing.EventTarget):
         return request
 
     async def send(self, data):
-        if self._socket and not self._socket.closed:
-            await self._socket.send_bytes(data)
-        else:
-            self._sendQueue.append(data)
+        await self._sendQueue.put(data)
 
-    async def onMessage(self, ev):
-        if self.keepalive:
-            self.keepalive.tickle()
+    async def messageHandler(self, data):
         message = protobufs.WebSocketMessage()
-        message.ParseFromString(ev.data)
+        message.ParseFromString(data)
         if message.type == message.REQUEST:
             await self._handleRequest(IncomingWebSocketRequest(self,
                 verb=message.request.verb, path=message.request.path,
@@ -236,7 +176,3 @@ class WebSocketResource(eventing.EventTarget):
                 raise ReferenceError('Unmatched WebSocket Response')
         else:
             raise TypeError(f'Unhandled message type: {message.type}')
-
-    def onClose(self, ev):
-        self._lastDuration = time.monotonic() - self._lastConnect
-        self._socket = None

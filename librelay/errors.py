@@ -63,3 +63,15 @@ class ProtocolError(RelayError):
 
 class NetworkError(RelayError):
     pass
+
+
+class AuthTokenError(RelayError):
+    pass
+
+
+class ExpiredAuthToken(AuthTokenError):
+    pass
+
+
+class InvalidAuthToken(AuthTokenError):
+    pass

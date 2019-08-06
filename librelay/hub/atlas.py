@@ -10,7 +10,7 @@ import logging
 import re
 import time
 from . import http
-from .. import storage
+from .. import storage, errors
 
 store = storage.getStore()
 logger = logging.getLogger(__name__)
@@ -33,9 +33,9 @@ def decode_jwt(encoded_token):
         "secret": parts[2]
     }
     if not token['payload'] or not token['payload']['exp']:
-        raise TypeError("Invalid Token")
+        raise errors.InvalidAuthToken()
     if token['payload']['exp'] <= time.time():
-        raise ValueError("Expired Token")
+        raise errors.ExpiredAuthToken()
     return token
 
 
@@ -173,7 +173,7 @@ class AtlasClient(http.HttpClient):
             if onRefresh:
                 try:
                     await onRefresh(token)
-                except Exception as e:
+                except Exception:
                     logger.exception('on_refresh callback error')
         next_update = refresh_delay(token)
         logger.info('maintainJWT will recheck auth token in %f seconds' %

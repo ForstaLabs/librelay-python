@@ -14,7 +14,7 @@ class HttpClient(object):
 
     def __del__(self):
         loop = asyncio.get_event_loop()
-        if not loop.is_closed():
+        if not loop.is_closed() and hasattr(self, 'httpSession'):
             loop.create_task(self.httpSession.close())
         self.httpSession = None
 

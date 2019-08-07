@@ -18,8 +18,8 @@ class KeyChangeEvent(Event):
     def __init__(self, key_error):
         super().__init__('keychange')
         self.accepted = False
-        self.addr = self.key_error.name
         self.key_error = key_error
+        self.addr = key_error.name
 
     def __str__(self):
         return f'<KeyChangeEvent: {self.addr}>'

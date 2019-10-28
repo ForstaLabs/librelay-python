@@ -6,27 +6,23 @@ README = 'README.md'
 
 
 def long_desc():
-    try:
-        import pypandoc
-    except ImportError:
-        with open(README) as f:
-            return f.read()
-    else:
-        return pypandoc.convert(README, 'rst')
+    with open(README) as f:
+        return f.read()
 
 setup(
     name='librelay',
-    version='0.7.1',
+    version='0.7.2',
     description='Forsta messaging protocol library',
-    author='Justin Mayfield',
-    author_email='tooker@gmail.com',
+    author='Forsta, Inc.',
+    author_email='support@forsta.io',
     url='https://github.com/ForstaLabs/librelay-python',
     license='GPL',
     long_description=long_desc(),
+    long_description_content_type="text/markdown",
     packages=find_packages(),
     install_requires=[
         'libsignal>=0.0.4',
-        'aiohttp>=3.5.4',
+        'aiohttp>=3.6.2',
         'protobuf>=3.7.0'
     ],
     test_suite='test',

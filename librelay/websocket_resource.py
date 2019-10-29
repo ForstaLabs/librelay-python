@@ -52,7 +52,7 @@ class WebSocketResource(eventing.EventTarget):
 
     def __init__(self, url, handleRequest=None, heartbeat=30):
         self.url = url
-        self._http = aiohttp.ClientSession()
+        self._httpSession = None
         self._socket = None
         self._sendQueue = asyncio.Queue()
         self._outgoingRequests = {}
@@ -62,6 +62,14 @@ class WebSocketResource(eventing.EventTarget):
         self._handleRequest = handleRequest or self.handleRequestFallback
         self._heartbeat = heartbeat
         self._ioTask = None
+
+    @property
+    def httpSession(self):
+        """ aiohttp is very particular about session creation context.
+        It must happen from an async method, therefor we must do lazy init. """
+        if self._httpSession is None:
+            self._httpSession = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30))
+        return self._httpSession
 
     async def handleRequestFallback(self, request):
         await request.respond(404, 'Not found')
@@ -75,7 +83,7 @@ class WebSocketResource(eventing.EventTarget):
                                f'{round(delay)} seconds.')
                 await asyncio.sleep(delay)
         self._connectCount += 1
-        self._socket = await self._http.ws_connect(self.url,
+        self._socket = await self.httpSession.ws_connect(self.url,
             heartbeat=self._heartbeat)
         self._lastConnect = time.monotonic()
         loop = asyncio.get_event_loop()

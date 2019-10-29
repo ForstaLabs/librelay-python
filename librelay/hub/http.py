@@ -9,14 +9,23 @@ class HttpClient(object):
 
     def __init__(self, *args, url=None, **kwargs):
         self.url = url
-        self.httpSession = aiohttp.ClientSession(read_timeout=30)
+        self._httpSession = None
         super().__init__(*args, **kwargs)
 
     def __del__(self):
         loop = asyncio.get_event_loop()
-        if not loop.is_closed() and hasattr(self, 'httpSession'):
+        if not loop.is_closed() and self._httpSession is not None and \
+           not self._httpSession.closed:
             loop.create_task(self.httpSession.close())
-        self.httpSession = None
+        self._httpSession = None
+
+    @property
+    def httpSession(self):
+        """ aiohttp is very particular about session creation context.
+        It must happen from an async method, therefor we must do lazy init. """
+        if self._httpSession is None:
+            self._httpSession = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30))
+        return self._httpSession
 
     async def fetch(self, urn, method='GET', **kwargs):
         """ Thin wrapper to augment json and auth support. """

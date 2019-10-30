@@ -68,7 +68,8 @@ class WebSocketResource(eventing.EventTarget):
         """ aiohttp is very particular about session creation context.
         It must happen from an async method, therefor we must do lazy init. """
         if self._httpSession is None:
-            self._httpSession = aiohttp.ClientSession()
+            self._httpSession = aiohttp.ClientSession(
+                timeout=aiohttp.ClientTimeout(total=300))
         return self._httpSession
 
     async def handleRequestFallback(self, request):

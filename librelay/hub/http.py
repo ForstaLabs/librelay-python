@@ -13,6 +13,8 @@ class HttpClient(object):
         super().__init__(*args, **kwargs)
 
     def __del__(self):
+        if not hasattr(self, '_httpSession'):
+            return  # Never initialized
         loop = asyncio.get_event_loop()
         if not loop.is_closed() and self._httpSession is not None and \
            not self._httpSession.closed:
@@ -24,7 +26,8 @@ class HttpClient(object):
         """ aiohttp is very particular about session creation context.
         It must happen from an async method, therefor we must do lazy init. """
         if self._httpSession is None:
-            self._httpSession = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30))
+            self._httpSession = aiohttp.ClientSession(
+                timeout=aiohttp.ClientTimeout(total=30))
         return self._httpSession
 
     async def fetch(self, urn, method='GET', **kwargs):

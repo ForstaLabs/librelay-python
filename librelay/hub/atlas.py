@@ -213,7 +213,7 @@ class AtlasClient(http.HttpClient):
             resp = await self.fetch('/v1/user/?id_in=' + ','.join(userIds))
             for user in resp['results']:
                 users.append(user)
-                missing.remove(user.id)
+                missing.remove(user['id'])
         if missing:
             resp = await self.fetch('/v1/directory/user/?id_in=' +
                                     ','.join(missing))

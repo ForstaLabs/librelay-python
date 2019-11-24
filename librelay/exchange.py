@@ -386,10 +386,10 @@ class ExchangeV1(Exchange):
         self._payload['messageRef'] = value
 
     def getAttachments(self):
-        return self._payload.get('attachments')
+        return self.getDataProperty('attachments')
 
     def setAttachments(self, value):
-        self._payload['attachments'] = value
+        self.setDataProperty('attachments', value)
 
     def getUserAgent(self):
         return self._payload.get('userAgent')

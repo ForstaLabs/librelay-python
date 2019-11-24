@@ -46,7 +46,7 @@ class MessageSender(eventing.EventTarget):
         ptr.key = key
         ptr.contentType = attachment.type
         iv = secrets.token_bytes(16);
-        encrypted = crypto.encryptAttachment(attachment.serialize(), key, iv)
+        encrypted = crypto.encryptAttachment(attachment.buffer, key, iv)
         ptr.id = await self.signal.putAttachment(encrypted)
         return ptr
 
@@ -104,11 +104,12 @@ class MessageSender(eventing.EventTarget):
         if attachments:
             # TODO Port to exchange interfaces (TBD)
             ex.setAttachments([x.getMeta() for x in attachments])
+        print("Set attachments to:", ex.getAttachments())
         dataMessage = ex.encode()
         if attachments:
             # TODO Port to exchange interfaces (TBD)
-            uploads = map(attachments, self._makeAttachmentPointer)
-            dataMessage.attachments = await asyncio.gather(uploads)
+            uploads = [self._makeAttachmentPointer(x) for x in attachments]
+            dataMessage.attachments.extend(await asyncio.gather(*uploads))
         content = protobufs.Content(dataMessage=dataMessage)
         ts = msnow()
         outMsg = self._send(content, ts,

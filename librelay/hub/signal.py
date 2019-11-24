@@ -191,24 +191,16 @@ class SignalClient(http.HttpClient):
         """ XXX Build in retry handling... """
         ptr = await self.request(call='attachment', urn=f'/{id}')
         headers = {"content-type": 'application/octet-stream'}
-        async with self._httpClient.get(ptr['location'], headers=headers) as r:
+        async with self.httpSession.get(ptr['location'], headers=headers) as r:
             return await r.read()
 
     async def putAttachment(self, body):
         """ XXX Build in retry handling... """
         ptr_resp = await self.request(call='attachment')
-        # Extract the id as a string from the location url
-        # (workaround for ids too large for Javascript numbers) # XXX
-        import pdb;pdb.set_trace()
-        match = self.attachment_id_regex.match(ptr_resp['location'])
-        if not match:
-            logger.error('Invalid attachment url for outgoing message',
-                          ptr_resp['location'])
-            raise TypeError('Received invalid attachment url')
         url = yarl.URL(ptr_resp['location'], encoded=True)
-        async with self._httpClient.put(url, data=body):
+        async with self.httpSession.put(url, data=body):
             pass
-        return match[1]
+        return ptr_resp['id']
 
     def getMessageWebSocketUrl(self):
         return ''.join([

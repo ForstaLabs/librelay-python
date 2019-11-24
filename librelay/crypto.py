@@ -58,6 +58,5 @@ def encryptAttachment(plaintext, keys, iv):
     mac_key = keys[32:64]
     ciphertext = AESCipher(aes_key, iv).encrypt(plaintext)
     ivAndCiphertext = iv + ciphertext
-    raise NotImplementedError("figure out signing ")
-    #mac = libsignal.crypto.sign(mac_key, ivAndCiphertext);
-    #return Buffer.concat([ivAndCiphertext, mac]);
+    mac = sign(mac_key, ivAndCiphertext)
+    return ivAndCiphertext + mac

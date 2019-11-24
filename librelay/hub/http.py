@@ -27,7 +27,7 @@ class HttpClient(object):
         It must happen from an async method, therefor we must do lazy init. """
         if self._httpSession is None:
             self._httpSession = aiohttp.ClientSession(
-                timeout=aiohttp.ClientTimeout(total=30))
+                timeout=aiohttp.ClientTimeout(total=300))
         return self._httpSession
 
     async def fetch(self, urn, method='GET', **kwargs):

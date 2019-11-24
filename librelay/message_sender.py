@@ -104,7 +104,6 @@ class MessageSender(eventing.EventTarget):
         if attachments:
             # TODO Port to exchange interfaces (TBD)
             ex.setAttachments([x.getMeta() for x in attachments])
-        print("Set attachments to:", ex.getAttachments())
         dataMessage = ex.encode()
         if attachments:
             # TODO Port to exchange interfaces (TBD)

@@ -23,7 +23,8 @@ logger = logging.getLogger(__name__)
 
 class MessageReceiver(eventing.EventTarget):
 
-    def __init__(self, signal, atlas, addr, device_id, signaling_key, no_web_socket=False):
+    def __init__(self, signal, atlas, addr, device_id, signaling_key, no_web_socket=False,
+                 sender=None):
         assert isinstance(signal, hub.SignalClient)
         assert isinstance(atlas, hub.AtlasClient)
         assert isinstance(addr, str)
@@ -31,7 +32,11 @@ class MessageReceiver(eventing.EventTarget):
         self._closing = False
         self._closed = asyncio.Future()
         self._connecting = None
-        self._sender = message_sender.MessageSender(addr, signal, atlas)
+        if sender is not None:
+            assert isinstance(sender, message_sender.MessageSender)
+        else:
+            sender = message_sender.MessageSender(addr, signal, atlas)
+        self._sender = sender
         self.signal = signal
         self.atlas = atlas
         self.addr = addr

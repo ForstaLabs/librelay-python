@@ -23,25 +23,21 @@ logger = logging.getLogger(__name__)
 
 class MessageReceiver(eventing.EventTarget):
 
-    def __init__(self, signal, atlas, addr, device_id, signaling_key, no_web_socket=False,
-                 sender=None):
+    def __init__(self, signal, atlas, addr, device_id, signaling_key, sender, no_web_socket=False):
         assert isinstance(signal, hub.SignalClient)
         assert isinstance(atlas, hub.AtlasClient)
         assert isinstance(addr, str)
         assert isinstance(device_id, int)
+        assert isinstance(sender, message_sender.MessageSender)
         self._closing = False
         self._closed = asyncio.Future()
         self._connecting = None
-        if sender is not None:
-            assert isinstance(sender, message_sender.MessageSender)
-        else:
-            sender = message_sender.MessageSender(addr, signal, atlas)
-        self._sender = sender
         self.signal = signal
         self.atlas = atlas
         self.addr = addr
         self.device_id = device_id
         self.signaling_key = signaling_key
+        self.sender = sender
         if not no_web_socket:
             url = self.signal.getMessageWebSocketUrl()
             self.wsr = WebSocketResource(url, handleRequest=self.handleRequest)
@@ -49,13 +45,17 @@ class MessageReceiver(eventing.EventTarget):
             self.wsr.addEventListener('error', self.onSocketError)
 
     @classmethod
-    def factory(cls, no_web_socket=False):
-        signal = hub.SignalClient.factory()
-        atlas = hub.AtlasClient.factory()
+    def factory(cls, signal=None, atlas=None, sender=None, **kwargs):
         addr = store.getState('addr')
         device_id = store.getState('deviceId')
         signaling_key = store.getState('signalingKey')
-        return cls(signal, atlas, addr, device_id, signaling_key, no_web_socket)
+        if signal is None:
+            signal = hub.SignalClient.factory()
+        if atlas is None:
+            atlas = hub.AtlasClient.factory()
+        if sender is None:
+            sender = message_sender.MessageSender(addr, signal, atlas)
+        return cls(signal, atlas, addr, device_id, signaling_key, sender, **kwargs)
 
     async def checkRegistration(self):
         try:
@@ -225,7 +225,7 @@ class MessageReceiver(eventing.EventTarget):
             logger.error("Unsupported syncMessage end-session sent by "
                          "device: %d", envelope.sourceDevice)
             return
-        ex = exchange.decode(sent.message, messageSender=self._sender,
+        ex = exchange.decode(sent.message, messageSender=self.sender,
                              messageReceiver=self, atlas=self.atlas,
                              signal=self.signal)
         ex.setSource(envelope.source);
@@ -249,7 +249,7 @@ class MessageReceiver(eventing.EventTarget):
     async def handleDataMessage(self, message, envelope, keychange):
         if message.flags & message.END_SESSION:
             await self.handleEndSession(envelope.source)
-        ex = exchange.decode(message, messageSender=self._sender,
+        ex = exchange.decode(message, messageSender=self.sender,
                              messageReceiver=self, atlas=self.atlas,
                              signal=self.signal)
         ex.setSource(envelope.source);

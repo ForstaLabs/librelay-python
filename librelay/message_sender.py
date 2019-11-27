@@ -12,6 +12,7 @@ from . import exchange
 from . import protobufs
 from .attachment import Attachment
 from .outgoing_message import OutgoingMessage
+from .queue_async import queue_async
 
 store = storage.getStore()
 logger = logging.getLogger(__name__)
@@ -129,13 +130,13 @@ class MessageSender(eventing.EventTarget):
 
         async def sendWrap(addr):
             try:
-                await outmsg.sendToAddr(addr)
+                await queue_async(f'message-send-job-{addr.split(".")[0]}',
+                                  outmsg.sendToAddr(addr))
             except Exception as e:
                 logger.exception('Message send error')
                 await self.onError(e)
-        loop = asyncio.get_event_loop()
         for x in addrs:
-            loop.create_task(sendWrap(x))
+            asyncio.create_task(sendWrap(x))
         return outmsg
 
     async def onError(self, e):

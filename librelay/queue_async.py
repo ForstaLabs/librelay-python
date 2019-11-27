@@ -30,5 +30,5 @@ async def queue_async(bucket, coro):
     scheduled.coro = coro
     queue.append(scheduled)
     if inactive:
-        asyncio.get_event_loop().create_task(_executor(bucket))
+        asyncio.create_task(_executor(bucket))
     return await scheduled

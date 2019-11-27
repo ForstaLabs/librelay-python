@@ -98,7 +98,7 @@ class WebSocketResource(eventing.EventTarget):
             except asyncio.CancelledError:
                 logger.debug("Websocket ioloop cancelled")
                 break
-            except Exception as e:
+            except Exception:
                 logger.exception("Websocket ioloop error:")
                 await asyncio.sleep(1)
         logger.warn("Websocket ioloop exit")

@@ -4,7 +4,6 @@ import datetime
 import inspect
 import logging
 from . import errors, storage, protobufs
-from .queue_async import queue_async
 from libsignal.sessionbuilder import SessionBuilder
 from libsignal.sessioncipher import SessionCipher
 from libsignal.state.prekeybundle import PreKeyBundle
@@ -249,12 +248,11 @@ class OutgoingMessage(object):
             deviceId = None
         else:
             deviceId = int(deviceId)
-        bucket = f'outgoing-msg-{addr}'
         try:
             if deviceId is not None:
-                await queue_async(bucket, self._sendToDevice(addr, deviceId))
+                await self._sendToDevice(addr, deviceId)
             else:
-                await queue_async(bucket, self._sendToAddr(addr))
+                await self._sendToAddr(addr)
         except Exception as e:
             self._emitError(addr, "Send error", e)
             raise

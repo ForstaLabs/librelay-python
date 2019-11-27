@@ -28,7 +28,7 @@ class ProvisioningCipher(object):
         ecRes = Curve.calculateAgreement(masterEphemeral, self.keyPair.privateKey)
         data = HKDF.createFor(3).deriveSecrets(ecRes, b"TextSecure Provisioning Message", 64)
         keyOne, keyTwo = data[:32], data[32:]
-        crypto.verifyMAC(ivAndCiphertext, keyTwo, mac)
+        await crypto.verifyMAC(ivAndCiphertext, keyTwo, mac)
         plaintext = AESCipher(keyOne, iv).decrypt(ciphertext)
         provisionMessage = protobufs.ProvisionMessage()
         provisionMessage.ParseFromString(plaintext)

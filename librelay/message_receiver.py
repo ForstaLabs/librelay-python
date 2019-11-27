@@ -145,7 +145,7 @@ class MessageReceiver(eventing.EventTarget):
             raise Exception('Invalid WebSocket resource received')
         envelope = None
         try:
-            data = crypto.decryptWebSocketMessage(request.body, self.signaling_key)
+            data = await crypto.decryptWebSocketMessage(request.body, self.signaling_key)
             envelope = protobufs.Envelope()
             envelope.ParseFromString(data)
         except Exception as e:
@@ -206,16 +206,16 @@ class MessageReceiver(eventing.EventTarget):
                 raise ValueError('Invalid padding')
         return buf # empty
 
-    def decrypt(self, envelope, ciphertext):
+    async def decrypt(self, envelope, ciphertext):
         stores = [store] * 4
         sessionCipher = SessionCipher(*stores, envelope.source,
                                       envelope.sourceDevice)
         if envelope.type == envelope.CIPHERTEXT:
             msg = WhisperMessage(serialized=ciphertext)
-            plainBuf = sessionCipher.decryptMsg(msg)
+            plainBuf = await crypto.executor(sessionCipher.decryptMsg, msg)
         elif envelope.type == envelope.PREKEY_BUNDLE:
             msg = PreKeyWhisperMessage(serialized=ciphertext)
-            plainBuf = sessionCipher.decryptPkmsg(msg)
+            plainBuf = await crypto.executor(sessionCipher.decryptPkmsg, msg)
         else:
             raise TypeError("Unknown message type")
         return self.unpad(plainBuf)
@@ -269,13 +269,13 @@ class MessageReceiver(eventing.EventTarget):
         await self.dispatchEvent(ev)
 
     async def handleLegacyMessage(self, envelope, keychange):
-        data = self.decrypt(envelope, envelope.legacyMessage)
+        data = await self.decrypt(envelope, envelope.legacyMessage)
         message = protobufs.DataMessage()
         message.ParseFromString(data)
         await self.handleDataMessage(message, envelope, keychange)
 
     async def handleContentMessage(self, envelope, keychange):
-        data = self.decrypt(envelope, envelope.content)
+        data = await self.decrypt(envelope, envelope.content)
         content = protobufs.Content()
         content.ParseFromString(data)
         if content.HasField('syncMessage'):
@@ -324,7 +324,7 @@ class MessageReceiver(eventing.EventTarget):
     async def getAttachment(self, attachment):
         """ Download and decrypt attachment pointer. """
         cipher = await self.signal.getAttachment(attachment.id)
-        return crypto.decryptAttachment(cipher, attachment.key)
+        return await crypto.decryptAttachment(cipher, attachment.key)
 
     async def handleEndSession(self, addr):
         device_ids = store.getDeviceIds(addr)

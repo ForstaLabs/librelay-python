@@ -47,7 +47,7 @@ class MessageSender(eventing.EventTarget):
         ptr.key = key
         ptr.contentType = attachment.type
         iv = secrets.token_bytes(16);
-        encrypted = crypto.encryptAttachment(attachment.buffer, key, iv)
+        encrypted = await crypto.encryptAttachment(attachment.buffer, key, iv)
         ptr.id = await self.signal.putAttachment(encrypted)
         return ptr
 

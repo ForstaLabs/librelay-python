@@ -8,7 +8,7 @@ _executor = None
 async def run(fn, *args):
     """ Perform blocking tasks in a thread to free the event loop. """
     loop = asyncio.get_running_loop()
-    nonlocal _executor
+    global _executor
     if _executor is None:
         _executor = ThreadPoolExecutor(max_workers=os.cpu_count(),
                                        thread_name_prefix='LibRelayExecutor')

@@ -89,10 +89,10 @@ async def registerDevice(atlasClient=None, name=defaultName,
                 })
             if onProvisionReady:
                 raise NotImplementedError("Not ported")
-                #r = onProvisionReady(proto.uuid, pubkey)
-                #if (r instanceof Promise) {
-                #    r.catch(reject)
-                #}
+                # r = onProvisionReady(proto.uuid, pubkey)
+                # if (r instanceof Promise) {
+                #     r.catch(reject)
+                # }
         elif request.path == "/v1/message" and request.verb == "PUT":
             msgEnvelope = protobufs.ProvisionEnvelope()
             msgEnvelope.ParseFromString(request.body)

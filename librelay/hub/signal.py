@@ -210,11 +210,12 @@ class SignalClient(http.HttpClient):
 
     def getProvisioningWebSocketUrl(self):
         return self.url.replace('https://', 'wss://').replace('http://', 'ws://') + \
-                                '/v1/websocket/provisioning/'
+            '/v1/websocket/provisioning/'
 
     async def updateGcmRegistrationId(self, gcm_reg_id):
         """ The GCM reg ID configures the data needed for the PushServer to
         wake us up using google cloud messaging's Push Server (an exercise for
         the user). """
-        return await self.request(call='accounts', method='PUT', urn='/gcm',
-            json={"gcmRegistrationId": gcm_reg_id})
+        return await self.request(call='accounts', method='PUT', urn='/gcm', json={
+            "gcmRegistrationId": gcm_reg_id
+        })

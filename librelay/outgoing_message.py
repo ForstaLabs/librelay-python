@@ -27,8 +27,8 @@ class OutgoingMessage(object):
         self.errors = []
         self.created = msnow()
         self._listeners = {}
-        self._ourAddr = store.getState('addr');
-        self._ourDeviceId = store.getState('deviceId');
+        self._ourAddr = store.getState('addr')
+        self._ourDeviceId = store.getState('deviceId')
 
     def on(self, event, callback):
         handlers = self._listeners.get(event)
@@ -129,7 +129,7 @@ class OutgoingMessage(object):
         try:
             await buildSessions(ident, keys)
         except errors.ProtocolError as e:
-            import pdb;pdb.set_trace() # Catch just protocol error for 404 XXX
+            import pdb; pdb.set_trace()  # Catch just protocol error for 404 XXX
             if isinstance(e, errors.ProtocolError) and e.code == 404:
                 logger.warning(f'Unregistered address (no devices): {addr}')
                 self.deleteSessions(addr, [x['deviceId'] for x in keys])
@@ -147,7 +147,7 @@ class OutgoingMessage(object):
 
     def getPaddedMessageLength(self, messageLength):
         messageLengthWithTerminator = messageLength + 1
-        messagePartCount = messageLengthWithTerminator //160
+        messagePartCount = messageLengthWithTerminator // 160
         if messageLengthWithTerminator % 160 != 0:
             messagePartCount += 1
         return messagePartCount * 160
@@ -188,8 +188,7 @@ class OutgoingMessage(object):
             else:
                 for x in e.response['staleDevices']:
                     ciphers[x].closeOpenSessionForDevice()
-            update = e.response.get('staleDevices', []) + \
-                     e.response.get('missingDevices', [])
+            update = e.response.get('staleDevices', []) + e.response.get('missingDevices', [])
             await self.getKeysForAddr(addr, devices=update)
             await self._sendToAddr(addr, _reentrant=True)
         else:

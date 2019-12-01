@@ -1,20 +1,14 @@
-import asyncio
 import hashlib
 import hmac
 import logging
+from . import executor
 from libsignal.sessioncipher import AESCipher
 
 logger = logging.getLogger(__name__)
 
 
-async def executor(fn, *args):
-    """ Perform blocking crypto tasks in a thread to free the event loop. """
-    loop = asyncio.get_running_loop()
-    return await loop.run_in_executor(None, fn, *args)
-
-
 async def sign(*args):
-    return await executor(_sign, *args)
+    return await executor.run(_sign, *args)
 
 
 def _sign(key, data):
@@ -24,7 +18,7 @@ def _sign(key, data):
 
 
 async def verifyMAC(*args):
-    return await executor(_verifyMAC, *args)
+    return await executor.run(_verifyMAC, *args)
 
 
 def _verifyMAC(data, key, mac):
@@ -35,7 +29,7 @@ def _verifyMAC(data, key, mac):
 
 
 async def decryptWebSocketMessage(*args):
-    return await executor(_decryptWebSocketMessage, *args)
+    return await executor.run(_decryptWebSocketMessage, *args)
 
 
 def _decryptWebSocketMessage(message, signaling_key):
@@ -57,7 +51,7 @@ def _decryptWebSocketMessage(message, signaling_key):
 
 
 async def decryptAttachment(*args):
-    return await executor(_decryptAttachment, *args)
+    return await executor.run(_decryptAttachment, *args)
 
 
 def _decryptAttachment(encryptedBin, keys):
@@ -76,7 +70,7 @@ def _decryptAttachment(encryptedBin, keys):
 
 
 async def encryptAttachment(*args):
-    return await executor(_encryptAttachment, *args)
+    return await executor.run(_encryptAttachment, *args)
 
 
 def _encryptAttachment(plaintext, keys, iv):

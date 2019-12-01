@@ -52,7 +52,8 @@ class ProvisioningCipher(object):
         ivLen = 16
         macLen = 32
         iv = crypto.randomBytes(ivLen)
-        encryptedMsg = await libsignal.crypto.encrypt(derivedSecret[0], message /* XXX validate is Buffer / right */, iv)
+        encryptedMsg = await libsignal.crypto.encrypt(derivedSecret[0],
+            message /* XXX validate is Buffer / right */, iv)
         msgLen = encryptedMsg.byteLength
 
         data = Uint8Array(1 + ivLen + msgLen)

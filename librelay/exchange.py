@@ -53,7 +53,7 @@ class Exchange(object):
     def encode(self):
         dataMessage = protobufs.DataMessage()
         dataMessage.flags = self.getFlags()
-        dataMessage.expireTimer=self.getExpiration()
+        dataMessage.expireTimer = self.getExpiration()
         dataMessage.body = json.dumps([self.encodePayload()])
         return dataMessage
 

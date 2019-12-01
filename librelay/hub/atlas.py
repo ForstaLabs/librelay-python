@@ -76,8 +76,8 @@ class AtlasClient(http.HttpClient):
                     auth_type = 'totp'
 
                     async def validator(password, otp):
-                        return await cls.authenticateViaPasswordOtp(userTag,
-                            password, otp, **options)
+                        return await cls.authenticateViaPasswordOtp(
+                            userTag, password, otp, **options)
                 else:
                     auth_type = 'password'
 
@@ -192,7 +192,7 @@ class AtlasClient(http.HttpClient):
         # Enhance the warnings a bit.
         for res, expr in zip(resp['results'], expressions):
             for w in res['warnings']:
-                w['context'] = expr[w['position']:w['position']+w['length']]
+                w['context'] = expr[w['position']:w['position'] + w['length']]
         return resp['results']
 
     def sanitizeTags(self, expression):

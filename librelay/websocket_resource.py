@@ -80,12 +80,11 @@ class WebSocketResource(eventing.EventTarget):
             await self.close()
             if self._lastDuration < 120:
                 delay = max(5, random.random() * self._connectCount)
-                logger.warning('Throttling websocket reconnect for ' \
+                logger.warning('Throttling websocket reconnect for '
                                f'{round(delay)} seconds.')
                 await asyncio.sleep(delay)
         self._connectCount += 1
-        self._socket = await self.httpSession.ws_connect(self.url,
-            heartbeat=self._heartbeat)
+        self._socket = await self.httpSession.ws_connect(self.url, heartbeat=self._heartbeat)
         self._lastConnect = time.monotonic()
         loop = asyncio.get_event_loop()
         self._ioTask = loop.create_task(self.ioLoop(loop))
@@ -160,7 +159,8 @@ class WebSocketResource(eventing.EventTarget):
         message = protobufs.WebSocketMessage()
         message.ParseFromString(data)
         if message.type == message.REQUEST:
-            await self._handleRequest(IncomingWebSocketRequest(self,
+            await self._handleRequest(IncomingWebSocketRequest(
+                self,
                 verb=message.request.verb, path=message.request.path,
                 body=message.request.body, id=message.request.id))
         elif message.type == message.RESPONSE:

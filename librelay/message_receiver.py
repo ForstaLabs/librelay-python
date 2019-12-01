@@ -5,6 +5,7 @@ from . import crypto
 from . import errors
 from . import eventing
 from . import exchange
+from . import executor
 from . import hub
 from . import message_sender
 from . import protobufs
@@ -83,7 +84,7 @@ class MessageReceiver(eventing.EventTarget):
                         return
                     except Exception as e:
                         await self.checkRegistration()
-                        logger.exception('CONNECT ERROR')  # XXX 
+                        logger.exception('CONNECT ERROR')  # XXX
                         logger.warn(f'Connect problem ({attempts} attempts)')
                     attempts += 1
             self._connecting = _connect()
@@ -118,7 +119,8 @@ class MessageReceiver(eventing.EventTarget):
                 if envelope.message:
                     envelope.legacyMessage = base64.b64decode(envelope.message)
                 await self.handleEnvelope(envelope)
-                deleting.append(self.signal.request(call='messages',
+                deleting.append(self.signal.request(
+                    call='messages',
                     method='DELETE',
                     urn=f'/{envelope.source}/{envelope.timestamp}'))
             await asyncio.gather(deleting)
@@ -204,7 +206,7 @@ class MessageReceiver(eventing.EventTarget):
                 return buf[:i]
             elif buf[i] != 0x00:
                 raise ValueError('Invalid padding')
-        return buf # empty
+        return buf  # empty
 
     async def decrypt(self, envelope, ciphertext):
         stores = [store] * 4
@@ -212,10 +214,10 @@ class MessageReceiver(eventing.EventTarget):
                                       envelope.sourceDevice)
         if envelope.type == envelope.CIPHERTEXT:
             msg = WhisperMessage(serialized=ciphertext)
-            plainBuf = await crypto.executor(sessionCipher.decryptMsg, msg)
+            plainBuf = await executor.run(sessionCipher.decryptMsg, msg)
         elif envelope.type == envelope.PREKEY_BUNDLE:
             msg = PreKeyWhisperMessage(serialized=ciphertext)
-            plainBuf = await crypto.executor(sessionCipher.decryptPkmsg, msg)
+            plainBuf = await executor.run(sessionCipher.decryptPkmsg, msg)
         else:
             raise TypeError("Unknown message type")
         return self.unpad(plainBuf)
@@ -228,10 +230,10 @@ class MessageReceiver(eventing.EventTarget):
         ex = exchange.decode(sent.message, messageSender=self.sender,
                              messageReceiver=self, atlas=self.atlas,
                              signal=self.signal)
-        ex.setSource(envelope.source);
-        ex.setSourceDevice(envelope.sourceDevice);
-        ex.setTimestamp(sent.timestamp);
-        ex.setAge(envelope.age);
+        ex.setSource(envelope.source)
+        ex.setSourceDevice(envelope.sourceDevice)
+        ex.setTimestamp(sent.timestamp)
+        ex.setAge(envelope.age)
         ev = eventing.Event('sent')
         ev.data = {
             "source": envelope.source,
@@ -243,7 +245,7 @@ class MessageReceiver(eventing.EventTarget):
             "age": envelope.age
         }
         if sent.expirationStartTimestamp:
-          ev.data.expirationStartTimestamp = sent.expirationStartTimestamp
+            ev.data.expirationStartTimestamp = sent.expirationStartTimestamp
         await self.dispatchEvent(ev)
 
     async def handleDataMessage(self, message, envelope, keychange):
@@ -252,10 +254,10 @@ class MessageReceiver(eventing.EventTarget):
         ex = exchange.decode(message, messageSender=self.sender,
                              messageReceiver=self, atlas=self.atlas,
                              signal=self.signal)
-        ex.setSource(envelope.source);
-        ex.setSourceDevice(envelope.sourceDevice);
-        ex.setTimestamp(envelope.timestamp);
-        ex.setAge(envelope.age);
+        ex.setSource(envelope.source)
+        ex.setSourceDevice(envelope.sourceDevice)
+        ex.setTimestamp(envelope.timestamp)
+        ex.setAge(envelope.age)
         ev = eventing.Event('message')
         ev.data = {
             "timestamp": envelope.timestamp,

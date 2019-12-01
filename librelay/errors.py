@@ -5,7 +5,7 @@ class RelayError(Exception):
 class IdentityKeyError(RelayError):
 
     def __init__(self, addr, key):
-        self.identitykey = key;
+        self.identitykey = key
         self.addr = addr
         self.accepted = False
         message = f"The identity of {addr} has changed"
@@ -32,15 +32,15 @@ class OutgoingMessageError(RelayError):
 class SendMessageError(RelayError):
 
     def __init__(self, addr, http_error):
-        self.addr = addr;
-        self.code = http_error.code;
+        self.addr = addr
+        self.code = http_error.code
         super().__init__(http_error.message)
 
 
 class MessageError(RelayError):
 
     def __init__(self, message, http_error):
-        self.code = http_error.code;
+        self.code = http_error.code
         super().__init__(http_error.message)
 
 
@@ -48,7 +48,7 @@ class UnregisteredUserError(RelayError):
 
     def __init__(self, addr, http_error):
         self.addr = addr
-        self.code = http_error.code;
+        self.code = http_error.code
         super().__init__(http_error.message)
 
 

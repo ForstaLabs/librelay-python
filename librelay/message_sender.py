@@ -46,28 +46,28 @@ class MessageSender(eventing.EventTarget):
         ptr = protobufs.AttachmentPointer()
         ptr.key = key
         ptr.contentType = attachment.type
-        iv = secrets.token_bytes(16);
+        iv = secrets.token_bytes(16)
         encrypted = await crypto.encryptAttachment(attachment.buffer, key, iv)
         ptr.id = await self.signal.putAttachment(encrypted)
         return ptr
 
     async def send(self,
-        to=None, distribution=None, addrs=None,
-        text=None, html=None,
-        data=None,
-        threadId=None,
-        threadType='conversation',
-        threadTitle=None,
-        messageType='content',
-        messageId=None,
-        messageRef=None,
-        expiration=0,
-        attachments=None,
-        flags=0,
-        userAgent='librelay-python',
-        noSync=False,
-        actions=None,
-        actionOptions=None):
+                   to=None, distribution=None, addrs=None,
+                   text=None, html=None,
+                   data=None,
+                   threadId=None,
+                   threadType='conversation',
+                   threadTitle=None,
+                   messageType='content',
+                   messageId=None,
+                   messageRef=None,
+                   expiration=0,
+                   attachments=None,
+                   flags=0,
+                   userAgent='librelay-python',
+                   noSync=False,
+                   actions=None,
+                   actionOptions=None):
         """ Primary method for sending messages. """
         ex = exchange.create()
         if distribution is None:
@@ -193,12 +193,12 @@ class MessageSender(eventing.EventTarget):
         outmsg = await self._send(content, timestamp, [addr])
         deviceIds = store.getDeviceIds(addr)
         raise NotImplementedError('xxx')
-        #await Promise(resolve => {
-        #    outmsg.on('sent', resolve)
-        #    outmsg.on('error', resolve)
-        #})
-        #await Promise.all(deviceIds.map(deviceId => {
-        #    address = libsignal.SignalProtocolAddress(addr, deviceId)
-        #    sessionCipher = libsignal.SessionCipher(store, address)
-        #    return sessionCipher.closeOpenSessionForDevice()
-        #}))
+        # await Promise(resolve => {
+        #     outmsg.on('sent', resolve)
+        #     outmsg.on('error', resolve)
+        # })
+        # await Promise.all(deviceIds.map(deviceId => {
+        #     address = libsignal.SignalProtocolAddress(addr, deviceId)
+        #     sessionCipher = libsignal.SessionCipher(store, address)
+        #     return sessionCipher.closeOpenSessionForDevice()
+        # }))

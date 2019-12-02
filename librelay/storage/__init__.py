@@ -126,11 +126,7 @@ class BackingStore(AxolotlStore):
             # Avoid circular import..
             from .. import hub
             signal = hub.SignalClient.factory()
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                loop.create_task(signal.refreshPreKeys())
-            else:
-                loop.run_until_complete(signal.refreshPreKeys())
+            asyncio.run_coroutine_threadsafe(signal.refreshPreKeys())
 
     def loadSignedPreKey(self, keyId):
         serialized = self.get(self.signed_prekey_ns, keyId)

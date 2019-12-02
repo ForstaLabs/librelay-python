@@ -52,9 +52,8 @@ class WebSocketResource(eventing.EventTarget):
 
     def __init__(self, url, handleRequest=None, heartbeat=30):
         self.url = url
-        self._httpSession = None
-        self._socket = None
         self._sendQueue = asyncio.Queue()
+        self._closeRequest = asyncio.Future()
         self._outgoingRequests = {}
         self._connectCount = 0
         self._lastDuration = 0
@@ -62,15 +61,6 @@ class WebSocketResource(eventing.EventTarget):
         self._handleRequest = handleRequest or self.handleRequestFallback
         self._heartbeat = heartbeat
         self._ioTask = None
-
-    @property
-    def httpSession(self):
-        """ aiohttp is very particular about session creation context.
-        It must happen from an async method, therefor we must do lazy init. """
-        if self._httpSession is None:
-            self._httpSession = aiohttp.ClientSession(
-                timeout=aiohttp.ClientTimeout(total=300))
-        return self._httpSession
 
     async def handleRequestFallback(self, request):
         await request.respond(404, 'Not found')
@@ -84,67 +74,60 @@ class WebSocketResource(eventing.EventTarget):
                                f'{round(delay)} seconds.')
                 await asyncio.sleep(delay)
         self._connectCount += 1
-        self._socket = await self.httpSession.ws_connect(self.url, heartbeat=self._heartbeat)
         self._lastConnect = time.monotonic()
-        loop = asyncio.get_event_loop()
-        self._ioTask = loop.create_task(self.ioLoop(loop))
+        assert not self._ioTask
+        self._ioTask = asyncio.create_task(self.ioLoop())
 
-    async def ioLoop(self, loop):
-        socket = self._socket
-        while socket is self._socket:
-            try:
-                await self._ioLoop(socket, loop)
-            except asyncio.CancelledError:
-                logger.debug("Websocket ioloop cancelled")
-                break
-            except Exception:
-                logger.exception("Websocket ioloop error:")
-                await asyncio.sleep(1)
-        logger.warn("Websocket ioloop exit")
-
-    async def _ioLoop(self, socket, loop):
+    async def ioLoop(self):
         """ This is overly complicated because aiohttp requires send and recv
         to be in the same task. """
         recvTask = None
         sendTask = None
-        while socket is self._socket:
-            if recvTask is None:
-                recvTask = loop.create_task(self._socket.receive())
-            if sendTask is None:
-                sendTask = loop.create_task(self._sendQueue.get())
-            done, pending = await asyncio.wait({recvTask, sendTask},
-                                               return_when=asyncio.FIRST_COMPLETED)
-            if recvTask in done:
-                msg = await recvTask
-                recvTask = None
-                if msg.type == aiohttp.WSMsgType.BINARY:
-                    await asyncio.shield(self.messageHandler(msg.data))
-                elif msg.type == aiohttp.WSMsgType.CLOSED:
-                    await asyncio.shield(self.close(msg.data, msg.extra))
-                else:
-                    logger.error("Unhandled websocket message: %s" % (msg,))
-            if sendTask in done:
-                data = await sendTask
-                sendTask = None
-                await self._socket.send_bytes(data)
-                self._sendQueue.task_done()
+        closeRequest = self._closeRequest
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=900)) as s:
+            async with s.ws_connect(self.url, heartbeat=self._heartbeat) as ws:
+                while True:
+                    if recvTask is None:
+                        recvTask = asyncio.create_task(ws.receive())
+                    if sendTask is None:
+                        sendTask = asyncio.create_task(self._sendQueue.get())
+                    done, pending = await asyncio.wait({recvTask, sendTask, closeRequest},
+                                                       return_when=asyncio.FIRST_COMPLETED)
+                    if closeRequest in done:
+                        code, reason = await closeRequest
+                        await ws.close(code=code, reason=reason)
+                        break
+                    if recvTask in done:
+                        msg = await recvTask
+                        recvTask = None
+                        if msg.type == aiohttp.WSMsgType.BINARY:
+                            await self.messageHandler(msg.data)
+                        elif msg.type == aiohttp.WSMsgType.CLOSED:
+                            await self.close(msg.data, msg.extra)
+                        else:
+                            logger.error("Unhandled websocket message: %s" % (msg,))
+                    if sendTask in done:
+                        data = await sendTask
+                        sendTask = None
+                        while True:
+                            await ws.send_bytes(data)
+                            try:
+                                data = self._sendQueue.get_nowait()
+                            except asyncio.QueueEmpty:
+                                break
 
     async def close(self, code=3000, reason=None):
-        socket = self._socket
-        self._socket = None
-        if self._ioTask:
-            self._ioTask.cancel()
-            self._ioTask = None
+        self._closeRequest.set_result((code, reason))
+        self._closeRequest = asyncio.Future()
+        assert self._ioTask
+        await self._ioTask
+        self._ioTask = None
         if self._lastConnect:
             self._lastDuration = time.monotonic() - self._lastConnect
-        if socket:
-            try:
-                await socket.close(code=code, message=reason)
-            finally:
-                ev = eventing.Event('close')
-                ev.code = code
-                ev.reason = reason
-                await self.dispatchEvent(ev)
+        ev = eventing.Event('close')
+        ev.code = code
+        ev.reason = reason
+        await self.dispatchEvent(ev)
 
     async def sendRequest(self, **kwargs):
         request = OutgoingWebSocketRequest(self, **kwargs)

@@ -191,15 +191,16 @@ class SignalClient(http.HttpClient):
         """ XXX Build in retry handling... """
         ptr = await self.request(call='attachment', urn=f'/{id}')
         headers = {"content-type": 'application/octet-stream'}
-        async with self.httpSession.get(ptr['location'], headers=headers) as r:
-            return await r.read()
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=900)) as s:
+            async with s.get(ptr['location'], headers=headers) as r:
+                return await r.read()
 
     async def putAttachment(self, body):
         """ XXX Build in retry handling... """
         ptr_resp = await self.request(call='attachment')
         url = yarl.URL(ptr_resp['location'], encoded=True)
-        async with self.httpSession.put(url, data=body):
-            pass
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=1800)) as s:
+            await s.put(url, data=body)
         return ptr_resp['id']
 
     def getMessageWebSocketUrl(self):
